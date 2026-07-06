@@ -1,0 +1,140 @@
+erDiagram
+    ORGANIZATIONS {
+        UUID id PK
+        TEXT name
+        TEXT slug UK
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    USERS {
+        UUID id PK
+        CITEXT email UK
+        TEXT password_hash
+        TEXT full_name
+        TEXT totp_secret
+        BOOLEAN totp_enabled
+        TEXT oauth_provider
+        TEXT oauth_subject
+        BOOLEAN is_active
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    MEMBERSHIPS {
+        UUID id PK
+        UUID user_id FK
+        UUID organization_id FK
+        membership_role role
+        UUID invited_by FK
+        TIMESTAMPTZ created_at
+    }
+
+    PROJECTS {
+        UUID id PK
+        UUID organization_id FK
+        TEXT name
+        TEXT slug
+        TEXT description
+        UUID created_by FK
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    ENVIRONMENTS {
+        UUID id PK
+        UUID project_id FK
+        TEXT name
+        TIMESTAMPTZ created_at
+    }
+
+    ENCRYPTION_KEYS {
+        UUID id PK
+        UUID environment_id FK
+        BYTEA wrapped_dek
+        INTEGER key_version
+        TEXT algorithm
+        BOOLEAN is_active
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ rotated_at
+    }
+
+    SECRETS {
+        UUID id PK
+        UUID environment_id FK
+        TEXT key_name
+        UUID current_version_id FK
+        BOOLEAN is_deleted
+        TIMESTAMPTZ created_at
+        TIMESTAMPTZ updated_at
+    }
+
+    SECRET_VERSIONS {
+        UUID id PK
+        UUID secret_id FK
+        UUID encryption_key_id FK
+        BYTEA encrypted_value
+        BYTEA iv
+        INTEGER version_number
+        UUID created_by FK
+        TIMESTAMPTZ created_at
+    }
+
+    API_TOKENS {
+        UUID id PK
+        UUID project_id FK
+        TEXT name
+        TEXT token_hash UK
+        TEXT scope
+        UUID created_by FK
+        TIMESTAMPTZ last_used_at
+        TIMESTAMPTZ expires_at
+        TIMESTAMPTZ revoked_at
+        TIMESTAMPTZ created_at
+    }
+
+    REFRESH_TOKENS {
+        UUID id PK
+        UUID user_id FK
+        TEXT token_hash UK
+        TIMESTAMPTZ expires_at
+        TIMESTAMPTZ revoked_at
+        TIMESTAMPTZ created_at
+    }
+
+    AUDIT_LOGS {
+        UUID id PK
+        UUID organization_id FK
+        UUID user_id FK
+        audit_action action
+        audit_resource_type resource_type
+        UUID resource_id
+        JSONB metadata
+        TIMESTAMPTZ created_at
+    }
+
+    ORGANIZATIONS ||--o{ MEMBERSHIPS : has
+    USERS ||--o{ MEMBERSHIPS : belongs_to
+    USERS o|--o{ MEMBERSHIPS : invited_by
+
+    ORGANIZATIONS ||--o{ PROJECTS : has
+    USERS o|--o{ PROJECTS : created_by
+
+    PROJECTS ||--o{ ENVIRONMENTS : has
+
+    ENVIRONMENTS ||--o{ ENCRYPTION_KEYS : has
+    ENVIRONMENTS ||--o{ SECRETS : has
+
+    SECRETS ||--o{ SECRET_VERSIONS : has_history
+    ENCRYPTION_KEYS ||--o{ SECRET_VERSIONS : encrypts
+    USERS o|--o{ SECRET_VERSIONS : created_by
+
+    SECRETS o|--o| SECRET_VERSIONS : current_version
+
+    PROJECTS ||--o{ API_TOKENS : has
+    USERS o|--o{ API_TOKENS : created_by
+
+    USERS ||--o{ REFRESH_TOKENS : has
+
+    ORGANIZATIONS o|--o{ AUDIT_LOGS : scoped_to
+    USERS o|--o{ AUDIT_LOGS : performed_by
