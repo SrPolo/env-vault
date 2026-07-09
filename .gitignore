@@ -15,9 +15,8 @@ landing/.env.*
 !landing/.env.example
 
 # Python backend
+__pycache__
 backend/.venv/
-backend/__pycache__/
-backend/app/**/__pycache__/
 backend/.pytest_cache/
 backend/.mypy_cache/
 backend/.ruff_cache/
