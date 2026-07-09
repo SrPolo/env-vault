@@ -1,0 +1,41 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+
+# Environment files
+backend/.env
+backend/.env.*
+!backend/.env.example
+dashboard/.env
+dashboard/.env.*
+!dashboard/.env.example
+landing/.env
+landing/.env.*
+!landing/.env.example
+
+# Python backend
+backend/.venv/
+backend/__pycache__/
+backend/app/**/__pycache__/
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+backend/.coverage
+backend/htmlcov/
+backend/*.log
+
+# Frontend apps
+dashboard/node_modules/
+dashboard/dist/
+dashboard/build/
+dashboard/coverage/
+dashboard/.vite/
+
+landing/node_modules/
+landing/dist/
+landing/.astro/
+landing/.vercel/
+
+# Shared generic logs
+*.log

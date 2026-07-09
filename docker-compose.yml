@@ -1,0 +1,58 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: envvault_backend_dev
+    working_dir: /app
+    command: uv run --no-sync fastapi dev app/main.py --host 0.0.0.0 --port 8000
+    environment:
+      POSTGRES_SERVER: postgres
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: envvault_postgres_dev
+    environment:
+      POSTGRES_USER: envvault_user
+      POSTGRES_PASSWORD: envvault_secure_password
+      POSTGRES_DB: envvault_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Este script inicializa las extensiones necesarias en la base de datos al arrancar
+      - ./backend/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U envvault_user -d envvault_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: envvault_redis_dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_data:
+    name: envvault_postgres_data_v2
+    driver: local
+  redis_data:
+    driver: local
