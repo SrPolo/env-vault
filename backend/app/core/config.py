@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "EnvVault Backend"
     API_V1_STR: str = "/api/v1"
     
+    # KMS / Encryption
+    ENCRYPTION_MASTER_KEY: str = "change_me_in_production_min_32_bytes_long!"
+    
     # Configuración DB
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_USER: str = "envvault_user"
