@@ -46,18 +46,19 @@ Monorepo con 3 proyectos independientes pero versionados juntos:
 - FastAPI (async)
 - SQLAlchemy 2.0 + Alembic (migraciones)
 - Pydantic v2 (schemas de entrada/salida)
-- Arquitectura en capas: routers → services → repositories, con inyección de dependencias
+- Arquitectura Layered Pragmática: `routers` → `services` → `uow` → `repositories`
+- Patrón Unit of Work (UoW) para manejar transacciones en la capa de servicios.
+- Arquitectura Hexagonal aplicada específicamente para el `EncryptionProvider` (KMS abstraction).
 - pytest para testing (unit + integración, apuntando a >80% coverage), testcontainers para tests contra Postgres real
 - structlog para logging estructurado
 
 ### Base de datos
 - PostgreSQL
 - Row Level Security (RLS) para aislamiento de datos entre proyectos/tenants a nivel de base de datos
-- pgcrypto como capa adicional de cifrado a nivel de columna
 - Tabla de auditoría (quién accedió/modificó qué variable y cuándo)
 
 ### Seguridad (crítico en este proyecto)
-- **Envelope encryption**: master key (fuera de la BD, en variable de entorno segura o KMS) cifra una Data Encryption Key (DEK) por proyecto/entorno, y esa DEK cifra las variables individuales
+- **Envelope encryption a nivel de aplicación**: Master Key (fuera de la BD, en `.env` local o KMS cloud) cifra una Data Encryption Key (DEK) por entorno. FastAPI (usando `cryptography`) cifra los valores en memoria *antes* de enviarlos a Postgres, garantizando que la DB nunca vea secretos en texto plano.
 - Autenticación con JWT (access + refresh tokens)
 - Argon2 para hash de contraseñas
 - OAuth2 (GitHub/Google) como opción de login
