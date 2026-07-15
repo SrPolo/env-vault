@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 
+import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
@@ -13,6 +14,26 @@ engine = create_async_engine(
 async_session_maker = async_sessionmaker(
     bind=engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
 )
+
+
+async def set_rls_context(
+    session: AsyncSession, user_id: str | None = None, org_id: str | None = None
+) -> None:
+    """
+    Sets PostgreSQL row-level security (RLS) contexts for the current transaction.
+    Uses local (transaction-scoped) configuration so it resets automatically upon commit/rollback.
+    """
+    if user_id:
+        await session.execute(
+            sa.text("SELECT set_config('app.current_user_id', :user_id, true)"),
+            {"user_id": str(user_id)},
+        )
+
+    if org_id:
+        await session.execute(
+            sa.text("SELECT set_config('app.current_org_id', :org_id, true)"),
+            {"org_id": str(org_id)},
+        )
 
 
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
