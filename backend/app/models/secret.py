@@ -92,6 +92,9 @@ class Secret(Base, UUIDMixin, CreatedAtMixin, UpdatedAtMixin):
         nullable=False,
         server_default=sa.text("false"),
     )
+    deleted_at: Mapped[sa.DateTime | None] = mapped_column(
+        sa.DateTime(timezone=True), nullable=True
+    )
 
 
 class SecretVersion(Base, UUIDMixin, CreatedAtMixin):
@@ -108,7 +111,7 @@ class SecretVersion(Base, UUIDMixin, CreatedAtMixin):
 
     secret_id: Mapped[sa.UUID] = mapped_column(
         UUID(as_uuid=True),
-        sa.ForeignKey("secrets.id", ondelete="CASCADE"),
+        sa.ForeignKey("secrets.id"),
         nullable=False,
     )
     encryption_key_id: Mapped[sa.UUID] = mapped_column(
