@@ -43,6 +43,9 @@ class AbstractUnitOfWork:
     async def commit(self) -> None:
         raise NotImplementedError
 
+    async def flush(self) -> None:
+        raise NotImplementedError
+
     async def rollback(self) -> None:
         raise NotImplementedError
 
@@ -94,6 +97,10 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
     async def commit(self) -> None:
         if self.session:
             await self.session.commit()
+
+    async def flush(self) -> None:
+        if self.session:
+            await self.session.flush()
 
     async def rollback(self) -> None:
         if self.session:
