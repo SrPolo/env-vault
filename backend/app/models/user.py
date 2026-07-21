@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import uuid
+from datetime import datetime
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import CITEXT, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -50,11 +53,11 @@ class RefreshToken(Base, UUIDMixin, CreatedAtMixin):
         ),
     )
 
-    user_id: Mapped[sa.UUID] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         sa.ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     token_hash: Mapped[str] = mapped_column(sa.Text, nullable=False, unique=True)
-    expires_at: Mapped[sa.DateTime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
-    revoked_at: Mapped[sa.DateTime | None] = mapped_column(sa.DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))

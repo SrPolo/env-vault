@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -15,15 +17,15 @@ class AuditLog(Base, UUIDMixin, CreatedAtMixin):
         sa.Index("idx_audit_logs_resource", "resource_type", "resource_id"),
     )
 
-    organization_id: Mapped[sa.UUID | None] = mapped_column(
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         sa.ForeignKey("organizations.id", ondelete="SET NULL"),
     )
-    user_id: Mapped[sa.UUID | None] = mapped_column(
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         sa.ForeignKey("users.id", ondelete="SET NULL"),
     )
     action: Mapped[str] = mapped_column(audit_action_enum, nullable=False)
     resource_type: Mapped[str] = mapped_column(audit_resource_type_enum, nullable=False)
-    resource_id: Mapped[sa.UUID | None] = mapped_column(UUID(as_uuid=True))
+    resource_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)

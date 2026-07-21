@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -23,12 +25,12 @@ class Membership(Base, UUIDMixin, CreatedAtMixin):
         sa.Index("idx_memberships_user", "user_id"),
     )
 
-    user_id: Mapped[sa.UUID] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         sa.ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    organization_id: Mapped[sa.UUID] = mapped_column(
+    organization_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         sa.ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
@@ -38,7 +40,7 @@ class Membership(Base, UUIDMixin, CreatedAtMixin):
         nullable=False,
         server_default=sa.text("'member'"),
     )
-    invited_by: Mapped[sa.UUID | None] = mapped_column(
+    invited_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         sa.ForeignKey("users.id", ondelete="SET NULL"),
     )

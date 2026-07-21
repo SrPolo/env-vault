@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import uuid
+from datetime import datetime
+
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import BYTEA, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -32,7 +35,7 @@ class EncryptionKey(Base, UUIDMixin, CreatedAtMixin):
         ),
     )
 
-    environment_id: Mapped[sa.UUID] = mapped_column(
+    environment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         sa.ForeignKey("environments.id", ondelete="CASCADE"),
         nullable=False,
@@ -53,7 +56,7 @@ class EncryptionKey(Base, UUIDMixin, CreatedAtMixin):
         nullable=False,
         server_default=sa.text("true"),
     )
-    rotated_at: Mapped[sa.DateTime | None] = mapped_column(sa.DateTime(timezone=True))
+    rotated_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
 
 class Secret(Base, UUIDMixin, CreatedAtMixin, UpdatedAtMixin):
@@ -80,19 +83,19 @@ class Secret(Base, UUIDMixin, CreatedAtMixin, UpdatedAtMixin):
         ),
     )
 
-    environment_id: Mapped[sa.UUID] = mapped_column(
+    environment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         sa.ForeignKey("environments.id", ondelete="CASCADE"),
         nullable=False,
     )
     key_name: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    current_version_id: Mapped[sa.UUID | None] = mapped_column(UUID(as_uuid=True))
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     is_deleted: Mapped[bool] = mapped_column(
         sa.Boolean,
         nullable=False,
         server_default=sa.text("false"),
     )
-    deleted_at: Mapped[sa.DateTime | None] = mapped_column(
+    deleted_at: Mapped[datetime | None] = mapped_column(
         sa.DateTime(timezone=True), nullable=True
     )
 
@@ -109,12 +112,12 @@ class SecretVersion(Base, UUIDMixin, CreatedAtMixin):
         sa.Index("idx_secret_versions_secret", "secret_id"),
     )
 
-    secret_id: Mapped[sa.UUID] = mapped_column(
+    secret_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         sa.ForeignKey("secrets.id", ondelete="CASCADE"),
         nullable=False,
     )
-    encryption_key_id: Mapped[sa.UUID] = mapped_column(
+    encryption_key_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         sa.ForeignKey("encryption_keys.id"),
         nullable=False,
@@ -122,7 +125,7 @@ class SecretVersion(Base, UUIDMixin, CreatedAtMixin):
     encrypted_value: Mapped[bytes] = mapped_column(BYTEA, nullable=False)
     iv: Mapped[bytes] = mapped_column(BYTEA, nullable=False)
     version_number: Mapped[int] = mapped_column(sa.Integer, nullable=False)
-    created_by: Mapped[sa.UUID | None] = mapped_column(
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         sa.ForeignKey("users.id", ondelete="SET NULL"),
     )
