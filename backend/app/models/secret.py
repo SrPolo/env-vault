@@ -111,7 +111,7 @@ class SecretVersion(Base, UUIDMixin, CreatedAtMixin):
 
     secret_id: Mapped[sa.UUID] = mapped_column(
         UUID(as_uuid=True),
-        sa.ForeignKey("secrets.id"),
+        sa.ForeignKey("secrets.id", ondelete="CASCADE"),
         nullable=False,
     )
     encryption_key_id: Mapped[sa.UUID] = mapped_column(
