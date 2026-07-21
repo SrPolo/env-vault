@@ -32,6 +32,5 @@ class UserRead(UserBase):
 
     id: UUID
     is_active: bool
-    is_verified: bool
     created_at: datetime
     updated_at: datetime
