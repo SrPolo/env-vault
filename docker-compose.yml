@@ -8,6 +8,11 @@ services:
     command: uv run --no-sync fastapi dev app/main.py --host 0.0.0.0 --port 8000
     environment:
       POSTGRES_SERVER: postgres
+      POSTGRES_USER: envvault_app
+      POSTGRES_PASSWORD: envvault_app_password
+      POSTGRES_DB: envvault_dev
+      MIGRATION_POSTGRES_USER: envvault_user
+      MIGRATION_POSTGRES_PASSWORD: envvault_secure_password
     ports:
       - "8000:8000"
     volumes:
@@ -25,6 +30,9 @@ services:
       POSTGRES_USER: envvault_user
       POSTGRES_PASSWORD: envvault_secure_password
       POSTGRES_DB: envvault_dev
+      # Runtime role created by init-db.sh on first boot (RLS-enforced).
+      APP_DB_USER: envvault_app
+      APP_DB_PASSWORD: envvault_app_password
     ports:
       - "5432:5432"
     volumes:

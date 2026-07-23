@@ -90,7 +90,8 @@ Monorepo con 3 proyectos independientes pero versionados juntos:
 Backend (`/backend`) — único componente con contenido real. Dashboard y landing aún no existen.
 
 ### Completo
-- Modelo de datos, migraciones Alembic (incl. bootstrap `create_organization_with_owner` y casts seguros de GUCs RLS), RLS, envelope encryption, Repository + UoW, SecretService, docker-compose.
+- Modelo de datos, migraciones Alembic (incl. bootstrap `create_organization_with_owner`, casts seguros de GUCs RLS, GRANTs DML a `envvault_app`), RLS, envelope encryption, Repository + UoW, SecretService, docker-compose.
+- **Roles DB**: runtime `envvault_app` (RLS) vs migraciones `envvault_user`. `init-db.sh` crea el rol en el primer boot de Postgres; FastAPI/config usan `envvault_app` por defecto; Alembic usa `MIGRATION_POSTGRES_*`.
 - **Tests**: suite pytest con testcontainers (Postgres real). Unitarios de `LocalKMSProvider`/`CryptoService` + integración de UoW/RLS/`SecretService`. Los tests conectan como rol no-superuser (`envvault_app`) para que FORCE RLS sea efectivo.
 
 ### Falta
@@ -100,7 +101,6 @@ Backend (`/backend`) — único componente con contenido real. Dashboard y landi
 4. CI/CD, Nginx, observabilidad (structlog sin usar)
 5. Dashboard, Landing, CLI
 6. Schemas Pydantic y servicios de dominio (Organization/Project/Environment/Membership)
-7. **Deuda de infra local**: docker-compose aún usa `POSTGRES_USER` (superuser) para la app. Runtime debería usar `envvault_app` (ver `backend/scripts/provision_app_role.sh` + `backend/README.md`). Los tests ya conectan como `envvault_app`.
 
 ### Próximo paso recomendado
 Autenticación (Argon2 + JWT access/refresh) y luego routers reales.

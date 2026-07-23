@@ -13,11 +13,11 @@ from app.models import Base
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
-# ENVVAULT_DATABASE_URL lets tests (and CI) point Alembic at a throwaway DB
-# without mutating application Settings.
+# Alembic uses the migration/ops role by default (schema owner), not the
+# runtime app role. ENVVAULT_DATABASE_URL lets tests/CI override the target DB.
 config.set_main_option(
     "sqlalchemy.url",
-    os.environ.get("ENVVAULT_DATABASE_URL", str(settings.SQLALCHEMY_DATABASE_URI)),
+    os.environ.get("ENVVAULT_DATABASE_URL", str(settings.SQLALCHEMY_MIGRATION_URI)),
 )
 
 # Interpret the config file for Python logging.

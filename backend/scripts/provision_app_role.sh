@@ -2,6 +2,12 @@
 # =============================================================================
 # Provision the application DB role `envvault_app`.
 #
+# Local Docker: on a FRESH volume, backend/init-db.sh already creates this role
+# via docker-entrypoint-initdb.d. Use this script when:
+#   - the Postgres volume already existed before init-db gained role creation
+#   - you are on staging/production (or any non-Docker bootstrap)
+#   - you need to rotate the LOGIN password / re-apply --grants
+#
 # WHY THIS IS NOT IN ALEMBIC
 #   - CREATE ROLE requires CREATEROLE (or superuser). Migration runners in
 #     locked-down environments often lack that privilege.
@@ -21,13 +27,13 @@
 #   # export DATABASE_URL=postgresql://envvault_user:envvault_secure_password@localhost:5432/envvault_dev
 #   ./scripts/provision_app_role.sh
 #
-# Typical order for a fresh environment:
+# Typical order for a fresh non-Docker environment:
 #   1) ./scripts/provision_app_role.sh          # create role + LOGIN/PASSWORD
-#   2) uv run alembic upgrade head             # schema + GRANT EXECUTE
-#   3) ./scripts/provision_app_role.sh --grants  # DML privileges on tables
+#   2) uv run alembic upgrade head             # schema + GRANT DML/EXECUTE
 #
-# Steps 1 and 3 can be combined after migrations by running with --grants on a
-# role that already exists; on first boot run without --grants first.
+# --grants remains available for repairing privileges without re-running
+# migrations; alembic upgrade head already applies DML GRANTs when the role
+# exists.
 # =============================================================================
 set -euo pipefail
 
