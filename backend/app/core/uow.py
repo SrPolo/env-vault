@@ -8,6 +8,8 @@ from app.core.database import async_session_maker, set_rls_context
 from app.repositories import (
     EncryptionKeyRepository,
     EnvironmentRepository,
+    MembershipRepository,
+    OrganizationRepository,
     ProjectRepository,
     SecretRepository,
     SecretVersionRepository,
@@ -20,8 +22,10 @@ class AbstractUnitOfWork:
     Abstract Base Class for the Unit of Work pattern.
     Provides the transactional boundary and exposes repositories.
     """
-    
+
     users: UserRepository
+    organizations: OrganizationRepository
+    memberships: MembershipRepository
     projects: ProjectRepository
     environments: EnvironmentRepository
     secrets: SecretRepository
@@ -70,18 +74,20 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
 
     async def __aenter__(self) -> SqlAlchemyUnitOfWork:
         self.session = self.session_factory()
-        
+
         # Seteamos el contexto RLS (local a la transacción)
         await set_rls_context(self.session, self.user_id, self.org_id)
-        
+
         # Instantiate repositories with the current session
         self.users = UserRepository(self.session)
+        self.organizations = OrganizationRepository(self.session)
+        self.memberships = MembershipRepository(self.session)
         self.projects = ProjectRepository(self.session)
         self.environments = EnvironmentRepository(self.session)
         self.secrets = SecretRepository(self.session)
         self.secret_versions = SecretVersionRepository(self.session)
         self.encryption_keys = EncryptionKeyRepository(self.session)
-        
+
         return self
 
     async def __aexit__(

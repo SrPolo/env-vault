@@ -31,7 +31,8 @@ class Settings(BaseSettings):
     POSTGRES_PORT: int = 5432
 
     # Migration / ops role (Alembic). Local docker-compose uses the cluster
-    # superuser; staging/prod can use a schema-owner without CREATEROLE.
+    # superuser (envvault_user). Staging/prod: envvault_migrate (schema owner,
+    # no SUPERUSER/BYPASSRLS/CREATEROLE) — see scripts/provision_migration_role.sh.
     MIGRATION_POSTGRES_USER: str = "envvault_user"
     MIGRATION_POSTGRES_PASSWORD: str = "envvault_secure_password"
 
