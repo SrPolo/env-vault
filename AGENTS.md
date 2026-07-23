@@ -105,20 +105,58 @@ Backend (`/backend`) — único componente con contenido real. Dashboard y landi
 
 ### Completo
 
-- Modelo de datos, migraciones Alembic (incl. bootstrap `create_organization_with_owner`, casts seguros de GUCs RLS, GRANTs DML a `envvault_app`), RLS, envelope encryption, Repository + UoW, SecretService, docker-compose.
-- **Roles DB**: runtime `envvault_app` (RLS) vs migraciones `envvault_user`. `init-db.sh` crea el rol en el primer boot de Postgres; FastAPI/config usan `envvault_app` por defecto; Alembic usa `MIGRATION_POSTGRES_*`.
-- **Tests**: suite pytest con testcontainers (Postgres real). Unitarios de `LocalKMSProvider`/`CryptoService` + integración de UoW/RLS/`SecretService`. Los tests conectan como rol no-superuser (`envvault_app`) para que FORCE RLS sea efectivo.
+- Modelo de datos, migraciones Alembic (incl. bootstrap `create_organization_with_owner`, casts seguros de GUCs RLS, GRANTs DML a `envvault_app`, SELECT de memberships entre peers vía `user_is_org_member`), RLS, envelope encryption, Repository + UoW, docker-compose.
+- **Servicios de dominio**: `CryptoService`, `SecretService`, `OrganizationService`, `MembershipService`, `ProjectService`, `EnvironmentService` (+ RBAC app-layer). UoW expone `organizations` / `memberships`.
+- **Roles DB**: runtime `envvault_app` (RLS) vs migraciones (`envvault_user` local / `envvault_migrate` staging-prod). `init-db.sh` crea el rol app en el primer boot de Postgres; scripts `provision_migration_role.sh` + `provision_app_role.sh` para bootstrap no-local; FastAPI/config usan `envvault_app` por defecto; Alembic usa `MIGRATION_POSTGRES_*`.
+- **Tests**: suite pytest con testcontainers (Postgres real). Unitarios de KMS/crypto + integración de UoW/RLS, `SecretService` y servicios de dominio. Los tests conectan como rol no-superuser (`envvault_app`) para que FORCE RLS sea efectivo.
 
-### Falta
+### Falta (ordenado por dependencias)
 
-1. Routers/API de negocio (main.py sigue siendo boilerplate)
-2. Autenticación (JWT, Argon2, OAuth2, 2FA)
-3. Rate limiting con Redis integrado en la app
-4. CI/CD, Nginx, observabilidad (structlog sin usar)
-5. Dashboard, Landing, CLI
-6. Schemas Pydantic y servicios de dominio (Organization/Project/Environment/Membership)
-7. **Roles de migración en producción/staging**: En local, `envvault_user` es superuser por conveniencia (docker-compose), pero en entornos reales debe usarse un rol dedicado (ej. `envvault_migrate`), dueño del schema y sin permisos peligrosos (`SUPERUSER`/`BYPASSRLS`/`CREATEROLE`), utilizado solo por Alembic para migraciones. El bootstrap inicial para crear `envvault_app` y `envvault_migrate` debe correrlo un operador/superuser como paso único. Documentar y proveer script/provisioning alineado con variables `MIGRATION_POSTGRES_*`. No reutilizar el modelo local en staging/prod.
+El orden anterior listaba routers antes que schemas/servicios y auth; eso invertía el grafo real (`routers → services → uow → repos`, con `user_id`/`org_id` desde JWT). Abajo, cada fase solo depende de fases anteriores.
+
+`main.py` sigue siendo boilerplate (sin routers). Auth aún no existe.
+
+#### Fase 0 — Infra DB no-local (antes del primer deploy) ✅
+
+0. **Roles de migración staging/prod** (`envvault_migrate` vs `envvault_app`): Hecho — ver `backend/scripts/provision_migration_role.sh` + `backend/README.md`. Local sigue con `envvault_user` superuser; no bloquea desarrollo.
+
+#### Fase 1 — Capa de dominio (sin HTTP) ✅
+
+1. **Schemas Pydantic + repos + servicios de dominio**: Hecho — Organization (vía `create_organization_with_owner`), Membership (RBAC viewer read-only), Project, Environment (DEK activa al crear), UoW con `organizations`/`memberships`. AuditLog opcional pendiente. Tests en `tests/integration/test_domain_services.py`.
+
+#### Fase 2 — Autenticación núcleo
+
+2a. **Auth mínima viable**: Argon2 + JWT access/refresh + `RefreshToken`. Alinear schemas (`UserCreate`/`UserRead` vs `full_name`). `AuthService` (register, login, refresh, logout). Sin OAuth ni 2FA todavía.
+2b. **Dependencias FastAPI**: `get_current_user`, `get_org_context`, `get_uow(user_id, org_id)`, inyección de servicios.
+2c. **Auth extendida** (después de 2a y routers básicos): OAuth2 (GitHub/Google), luego 2FA/TOTP — no bloquea el MVP HTTP.
+
+#### Fase 3 — Routers / API de negocio
+
+3. **Montar routers en FastAPI** (reemplazar boilerplate de `main.py`), en este orden:
+   1. `auth` — register/login/refresh
+   2. `organizations` / `memberships`
+   3. `projects` / `environments`
+   4. `secrets` — delegar a `SecretService` (reveal → audit `reveal`)
+   5. Healthcheck (`/health`) — útil para Docker/Nginx/CI
+
+   Convención sugerida: `/api/v1/...` con org en path o header (`X-Organization-Id`).
+
+#### Fase 4 — Hardening de la API
+
+4. **Rate limiting con Redis** — sobre todo auth y reveal de secretos.
+5. **Observabilidad** — cablear `structlog` (request id, user/org), métricas básicas si aplica.
+
+#### Fase 5 — Empaquetado y entrega
+
+6. **CI/CD** (GitHub Actions: lint → test → build); ampliar con tests HTTP de la Fase 3.
+7. **Nginx** — reverse proxy / TLS. Si el pipeline despliega a staging/prod, depende de la Fase 0.
+
+#### Fase 6 — Clientes (en paralelo entre sí; dependen de la API)
+
+8. **Dashboard** (Vite/React)
+9. **Landing** (Astro) — puede adelantarse visualmente; waitlist/CTA real pueden esperar
+10. **CLI** (`envvault pull`) — necesita auth + secrets API
 
 ### Próximo paso recomendado
 
-Autenticación (Argon2 + JWT access/refresh) y luego routers reales.
+Auth JWT/Argon2 + deps FastAPI (`CurrentUser`, `OrgContext`, UoW), luego routers que expongan los servicios de dominio ya existentes.

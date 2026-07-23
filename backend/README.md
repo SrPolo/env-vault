@@ -36,23 +36,63 @@ uv run alembic upgrade head
 
 ## Database roles
 
-Hay dos roles con responsabilidades distintas:
+### Local vs staging/prod
+
+| Entorno | Rol de migraciones (Alembic) | Rol de runtime (FastAPI) | Notas |
+|---------|------------------------------|--------------------------|--------|
+| **Local** (docker-compose) | `envvault_user` | `envvault_app` | `envvault_user` es **superuser** por conveniencia. `init-db.sh` crea `envvault_app` en el primer boot. |
+| **Staging / prod** | `envvault_migrate` | `envvault_app` | Ambos **sin** `SUPERUSER` / `BYPASSRLS` / `CREATEROLE`. Bootstrap one-shot por un operador/superuser; no reutilizar el modelo local. |
 
 | Rol | Quién lo usa | Privilegios esperados |
 |-----|--------------|------------------------|
-| Rol de migraciones (local: `envvault_user`) | Alembic / ops | Dueño del schema. En docker-compose es **superuser** (conveniencia local). |
+| `envvault_user` (solo local) | Alembic / ops en docker-compose | Dueño del schema. Superuser de conveniencia — **no** usar este patrón en staging/prod. |
+| `envvault_migrate` (staging/prod) | Alembic vía `MIGRATION_POSTGRES_*` | Dueño del schema `public`. `LOGIN`, **sin** `SUPERUSER` / `BYPASSRLS` / `CREATEROLE`. Puede crear tablas, policies, functions y `GRANT` a `envvault_app`. |
 | `envvault_app` | FastAPI en runtime + tests de integración | `LOGIN`, **sin** `BYPASSRLS`, sin `SUPERUSER`. Solo DML + `EXECUTE` explícito en funciones de negocio. |
 
 Defaults en `app/core/config.py`:
 
 - Runtime: `POSTGRES_USER=envvault_app` / `POSTGRES_PASSWORD=envvault_app_password`
-- Migraciones: `MIGRATION_POSTGRES_USER=envvault_user` / `MIGRATION_POSTGRES_PASSWORD=…`
+- Migraciones (local): `MIGRATION_POSTGRES_USER=envvault_user` / `MIGRATION_POSTGRES_PASSWORD=…`
+- Migraciones (staging/prod): `MIGRATION_POSTGRES_USER=envvault_migrate` / `MIGRATION_POSTGRES_PASSWORD=…`
   (Alembic lee `SQLALCHEMY_MIGRATION_URI`; override con `ENVVAULT_DATABASE_URL`)
 
 Si conectas FastAPI como superuser, **RLS no se aplica** aunque exista
 `FORCE ROW LEVEL SECURITY`.
 
-### Por qué `envvault_app` no se crea dentro de Alembic
+### Bootstrap staging / prod (one-shot)
+
+Ejecutar como operador/superuser (secret store / CI secrets — **nunca** passwords en git):
+
+```bash
+# 1) Rol de migraciones + ownership del schema public (+ extensiones pgcrypto/citext)
+export MIGRATION_DB_PASSWORD='…'   # → luego MIGRATION_POSTGRES_PASSWORD
+export DATABASE_URL='postgresql://ops_superuser:…@db-host:5432/envvault'
+./scripts/provision_migration_role.sh
+
+# 2) Rol de runtime
+export APP_DB_PASSWORD='…'         # → luego POSTGRES_PASSWORD
+./scripts/provision_app_role.sh
+
+# 3) Migraciones como envvault_migrate (no como superuser)
+export MIGRATION_POSTGRES_USER=envvault_migrate
+export MIGRATION_POSTGRES_PASSWORD="$MIGRATION_DB_PASSWORD"
+export POSTGRES_USER=envvault_app
+export POSTGRES_PASSWORD="$APP_DB_PASSWORD"
+uv run alembic upgrade head
+
+# 4) Runtime: FastAPI con POSTGRES_* = envvault_app
+```
+
+Si el schema ya tenía objetos bajo otro rol (p. ej. bootstrap previo como
+superuser), reasigna ownership en el paso 1:
+
+```bash
+./scripts/provision_migration_role.sh --transfer-from=old_owner_role
+```
+
+Orden mental: **crear migrate → crear app → Alembic como migrate → runtime como app**.
+
+### Por qué los roles no se crean dentro de Alembic
 
 1. **`CREATE ROLE` exige `CREATEROLE` o superuser.** Un runner de migraciones
    restringido (patrón habitual en staging/prod) **fallaría** si la migración
@@ -62,8 +102,10 @@ Si conectas FastAPI como superuser, **RLS no se aplica** aunque exista
 
 Por eso:
 
-- **Docker (primer boot):** [`init-db.sh`](init-db.sh) crea el rol.
-- **Volumen ya existente / staging / prod:** [`scripts/provision_app_role.sh`](scripts/provision_app_role.sh).
+- **Docker local (primer boot):** [`init-db.sh`](init-db.sh) crea `envvault_app`.
+- **Volumen ya existente / repair local:** [`scripts/provision_app_role.sh`](scripts/provision_app_role.sh).
+- **Staging / prod:** [`scripts/provision_migration_role.sh`](scripts/provision_migration_role.sh)
+  + [`scripts/provision_app_role.sh`](scripts/provision_app_role.sh).
 - Alembic **asume** que `envvault_app` ya existe y hace `GRANT … TO envvault_app`
   (falla con un mensaje claro si falta el rol).
 
@@ -71,24 +113,10 @@ Por eso:
 
 | Operación | ¿Quién puede? |
 |-----------|----------------|
-| `CREATE TABLE` / policies / functions | Dueño del schema o superuser |
-| `CREATE ROLE` (**no lo hace Alembic**) | Superuser o `CREATEROLE` — `init-db.sh` / script de provisioning |
+| `CREATE TABLE` / policies / functions | Dueño del schema (`envvault_migrate` en staging/prod; `envvault_user` en local) |
+| `CREATE ROLE` (**no lo hace Alembic**) | Superuser o `CREATEROLE` — scripts de provisioning / `init-db.sh` |
 | `GRANT … TO envvault_app` | Dueño del schema (rol de migraciones) |
-
-En staging/prod conviene: bootstrap one-shot de `envvault_app` por un
-operador/superuser + rol de migraciones con privilegios de schema (sin
-necesidad de `CREATEROLE`).
-
-#### TODO (staging/prod)
-
-Crear un rol de migraciones **no-superuser** (ej. `envvault_migrate`):
-
-- Dueño del schema (puede crear tablas, policies, functions, `GRANT` a `envvault_app`)
-- Sin `SUPERUSER`, sin `BYPASSRLS`, sin `CREATEROLE`
-- Credenciales vía `MIGRATION_POSTGRES_*` (o secret store en CI/CD)
-- `envvault_user` como superuser queda solo como conveniencia de docker-compose local
-
-Hoy esto **no** está automatizado; ver también el ítem en `AGENTS.md` (§ Falta).
+| `CREATE EXTENSION` | Superuser en bootstrap (`provision_migration_role.sh` / `init-db.sh`); Alembic asume que ya existen |
 
 ## Tests
 
