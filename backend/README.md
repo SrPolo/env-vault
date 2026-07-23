@@ -79,6 +79,17 @@ En staging/prod conviene: bootstrap one-shot de `envvault_app` por un
 operador/superuser + rol de migraciones con privilegios de schema (sin
 necesidad de `CREATEROLE`).
 
+#### TODO (staging/prod)
+
+Crear un rol de migraciones **no-superuser** (ej. `envvault_migrate`):
+
+- Dueño del schema (puede crear tablas, policies, functions, `GRANT` a `envvault_app`)
+- Sin `SUPERUSER`, sin `BYPASSRLS`, sin `CREATEROLE`
+- Credenciales vía `MIGRATION_POSTGRES_*` (o secret store en CI/CD)
+- `envvault_user` como superuser queda solo como conveniencia de docker-compose local
+
+Hoy esto **no** está automatizado; ver también el ítem en `AGENTS.md` (§ Falta).
+
 ## Tests
 
 Los tests de integración levantan Postgres con testcontainers, crean
