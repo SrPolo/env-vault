@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 # =============================================================================
 # Provision the application DB role `envvault_app`.
 #
@@ -21,6 +21,10 @@
 #   # export DATABASE_URL=postgresql://envvault_user:envvault_secure_password@localhost:5432/envvault_dev
 #   ./scripts/provision_app_role.sh
 #
+# Docker Compose (recommended for local):
+#   docker compose up -d postgres redis   # runs db-provision automatically
+#   docker compose run --rm db-provision --grants   # after alembic upgrade
+#
 # Typical order for a fresh environment:
 #   1) ./scripts/provision_app_role.sh          # create role + LOGIN/PASSWORD
 #   2) uv run alembic upgrade head             # schema + GRANT EXECUTE
@@ -29,9 +33,9 @@
 # Steps 1 and 3 can be combined after migrations by running with --grants on a
 # role that already exists; on first boot run without --grants first.
 # =============================================================================
-set -euo pipefail
+set -eu
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 APP_DB_USER="${APP_DB_USER:-envvault_app}"
@@ -50,7 +54,7 @@ for arg in "$@"; do
   case "$arg" in
     --grants) DO_GRANTS=1 ;;
     -h|--help)
-      sed -n '2,35p' "$0"
+      sed -n '2,40p' "$0"
       exit 0
       ;;
     *)
@@ -70,10 +74,12 @@ echo "Provisioning role '${APP_DB_USER}' via ${DATABASE_URL%%@*}@*** ..."
 # Password is interpolated by the shell into a dollar-quoted DO body so we do
 # not rely on psql :variables inside CREATE ROLE (awkward with special chars).
 # Callers must supply a password without single quotes.
-if [[ "$APP_DB_PASSWORD" == *"'"* ]]; then
-  echo "APP_DB_PASSWORD must not contain single quotes." >&2
-  exit 1
-fi
+case "$APP_DB_PASSWORD" in
+  *"'"*)
+    echo "APP_DB_PASSWORD must not contain single quotes." >&2
+    exit 1
+    ;;
+esac
 
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<EOSQL
 DO \$\$
@@ -105,7 +111,7 @@ END
 GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO ${APP_DB_USER};
 EOSQL
 
-if [[ "$DO_GRANTS" -eq 1 ]]; then
+if [ "$DO_GRANTS" -eq 1 ]; then
   echo "Granting schema/table privileges to '${APP_DB_USER}' ..."
   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<EOSQL
 GRANT USAGE ON SCHEMA public TO ${APP_DB_USER};

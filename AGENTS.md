@@ -100,7 +100,7 @@ Backend (`/backend`) — único componente con contenido real. Dashboard y landi
 4. CI/CD, Nginx, observabilidad (structlog sin usar)
 5. Dashboard, Landing, CLI
 6. Schemas Pydantic y servicios de dominio (Organization/Project/Environment/Membership)
-7. **Deuda de infra local**: docker-compose aún usa `POSTGRES_USER` (superuser) para la app. Runtime debería usar `envvault_app` (ver `backend/scripts/provision_app_role.sh` + `backend/README.md`). Los tests ya conectan como `envvault_app`.
+7. ~~**Deuda de infra local**: docker-compose usaba `POSTGRES_USER` (superuser) para la app.~~ Resuelto: runtime usa `APP_DB_*` / `envvault_app`; Alembic usa `POSTGRES_*`; Compose provisiona el rol vía `init-db.sh` + servicio `db-provision`.
 
 ### Próximo paso recomendado
 Autenticación (Argon2 + JWT access/refresh) y luego routers reales.

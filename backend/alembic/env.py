@@ -15,9 +15,13 @@ from app.models import Base
 config = context.config
 # ENVVAULT_DATABASE_URL lets tests (and CI) point Alembic at a throwaway DB
 # without mutating application Settings.
+# Default is the admin/owner DSN — migrations must not run as envvault_app.
 config.set_main_option(
     "sqlalchemy.url",
-    os.environ.get("ENVVAULT_DATABASE_URL", str(settings.SQLALCHEMY_DATABASE_URI)),
+    os.environ.get(
+        "ENVVAULT_DATABASE_URL",
+        str(settings.SQLALCHEMY_ADMIN_DATABASE_URI),
+    ),
 )
 
 # Interpret the config file for Python logging.

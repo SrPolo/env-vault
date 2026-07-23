@@ -7,35 +7,41 @@ API FastAPI + PostgreSQL (RLS) + envelope encryption.
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
 - Docker (Postgres + Redis vía `docker-compose` en la raíz del monorepo)
-- `psql` en el PATH (solo para provisioning de roles)
 
 ## Quick start (local)
 
 ```bash
 # Desde la raíz del monorepo
-docker compose up -d postgres redis
+# Levanta Postgres + Redis y provisiona envvault_app dentro de Compose
+# (servicio one-shot `db-provision`; no hace falta psql en el host).
+docker compose up -d postgres redis db-provision
 
 cd backend
 cp .env.example .env   # si existe; o exporta las vars de app/core/config.py
 
-# 1) Rol de aplicación (NO es un paso de Alembic — ver sección siguiente)
-export APP_DB_PASSWORD='choose-a-strong-password'
-./scripts/provision_app_role.sh
-
-# 2) Migraciones (como rol dueño del schema / superuser local)
+# Migraciones como rol dueño del schema (POSTGRES_USER), no como envvault_app
 uv sync --group dev
 uv run alembic upgrade head
 
-# 3) Privilegios DML sobre tablas ya creadas
-./scripts/provision_app_role.sh --grants
+# Privilegios DML sobre tablas ya creadas (también vía Compose)
+docker compose run --rm db-provision --grants
 
-# 4) Tests
+# Tests
 uv run pytest
 ```
 
 La app en runtime **debe** conectarse como `envvault_app`, no como el usuario
-de migraciones. Si conectas como superuser (`POSTGRES_USER` de docker-compose),
-**RLS no se aplica** aunque exista `FORCE ROW LEVEL SECURITY`.
+de migraciones. `Settings.SQLALCHEMY_DATABASE_URI` usa `APP_DB_*`; Alembic usa
+`SQLALCHEMY_ADMIN_DATABASE_URI` (`POSTGRES_*`). Si conectas como superuser
+(`POSTGRES_USER` de docker-compose), **RLS no se aplica** aunque exista
+`FORCE ROW LEVEL SECURITY`.
+
+### Override de password local
+
+```bash
+export APP_DB_PASSWORD='choose-a-strong-password'
+docker compose up -d postgres redis db-provision
+```
 
 ## Database roles
 
@@ -58,20 +64,16 @@ Por eso:
 
 - Alembic **asume** que `envvault_app` ya existe y solo hace
   `GRANT EXECUTE … TO envvault_app` (falla con un mensaje claro si falta el rol).
-- El script [`scripts/provision_app_role.sh`](scripts/provision_app_role.sh)
-  es el único lugar que crea/actualiza el rol **con**
-  `LOGIN` + `PASSWORD`.
+- El provisioning local vive en Docker Compose:
+  - `backend/init-db.sh` → primer boot del volumen (extensiones + rol)
+  - servicio `db-provision` → CREATE/ALTER idempotente en cada `compose up`
+  - [`scripts/provision_app_role.sh`](scripts/provision_app_role.sh) → mismo
+    script que monta el servicio (también usable a mano si hace falta)
 
 ```bash
-# Obligatorio antes de `alembic upgrade` cuando la revisión c3f8a91d2e47
-# (o posteriores que GRANT a envvault_app) aún no está aplicada:
-export APP_DB_PASSWORD='...'
-./scripts/provision_app_role.sh
-
+docker compose up -d postgres redis db-provision
 uv run alembic upgrade head
-
-# Después de que existan las tablas:
-./scripts/provision_app_role.sh --grants
+docker compose run --rm db-provision --grants
 ```
 
 Equivalente manual (mismo efecto que el script):
@@ -89,15 +91,15 @@ ALTER ROLE envvault_app WITH LOGIN PASSWORD '...';
 
 ### Requisitos del rol que ejecuta Alembic
 
-| Operación | ¿Quién puede? |
-|-----------|----------------|
+| Operación | Quién puede |
+|-----------|-------------|
 | `CREATE TABLE` / policies / functions | Dueño del schema o superuser |
-| `CREATE ROLE` (**no lo hace Alembic**) | Superuser o `CREATEROLE` — solo el script de provisioning |
+| `CREATE ROLE` (**no lo hace Alembic**) | Superuser o `CREATEROLE` — solo el provisioning |
 | `GRANT EXECUTE … TO envvault_app` | Dueño de la función (el rol de migraciones, tras crear la función) |
 
 **Estado actual en docker-compose:** `POSTGRES_USER=envvault_user` es el
-superuser del cluster Postgres del contenedor. Por eso `provision_app_role.sh`
-y `alembic upgrade` funcionan con las mismas credenciales en local. Eso **no**
+superuser del cluster Postgres del contenedor (migraciones). El runtime de
+FastAPI usa `APP_DB_USER=envvault_app` provisionado por `db-provision`. Eso **no**
 garantiza el mismo layout en producción: allí conviene un rol de migraciones
 con privilegios de schema (sin necesidad de `CREATEROLE`) + un bootstrap
 one-shot de `envvault_app` hecho por un operador/superuser.
@@ -119,4 +121,6 @@ uv run alembic upgrade head
 uv run alembic revision -m "message"
 uv run ruff check .
 uv run pytest -v
+docker compose run --rm db-provision          # (re)crea/actualiza el rol
+docker compose run --rm db-provision --grants # DML tras migraciones
 ```

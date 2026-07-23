@@ -8,15 +8,45 @@ services:
     command: uv run --no-sync fastapi dev app/main.py --host 0.0.0.0 --port 8000
     environment:
       POSTGRES_SERVER: postgres
+      # Owner / migrations (Alembic). Not used for app runtime queries.
+      POSTGRES_USER: envvault_user
+      POSTGRES_PASSWORD: envvault_secure_password
+      POSTGRES_DB: envvault_dev
+      # Restricted runtime role (FORCE RLS applies).
+      APP_DB_USER: envvault_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-envvault_app_password}
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-provision:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
+
+  # One-shot: create/update envvault_app after Postgres is healthy.
+  # Also covers volumes that already existed before init-db.sh gained this logic.
+  # After `alembic upgrade head`, grant DML with:
+  #   docker compose run --rm db-provision --grants
+  db-provision:
+    image: postgres:16-alpine
+    container_name: envvault_db_provision
+    environment:
+      POSTGRES_SERVER: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: envvault_user
+      POSTGRES_PASSWORD: envvault_secure_password
+      POSTGRES_DB: envvault_dev
+      APP_DB_USER: envvault_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-envvault_app_password}
+    volumes:
+      - ./backend/scripts/provision_app_role.sh:/provision_app_role.sh:ro
+    entrypoint: ["/bin/sh", "/provision_app_role.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   postgres:
     image: postgres:16-alpine
@@ -25,11 +55,13 @@ services:
       POSTGRES_USER: envvault_user
       POSTGRES_PASSWORD: envvault_secure_password
       POSTGRES_DB: envvault_dev
+      APP_DB_USER: envvault_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-envvault_app_password}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Este script inicializa las extensiones necesarias en la base de datos al arrancar
+      # First-boot only: extensions + envvault_app role
       - ./backend/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U envvault_user -d envvault_dev"]
