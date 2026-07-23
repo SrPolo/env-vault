@@ -27,9 +27,16 @@
 #   # export DATABASE_URL=postgresql://envvault_user:envvault_secure_password@localhost:5432/envvault_dev
 #   ./scripts/provision_app_role.sh
 #
-# Typical order for a fresh non-Docker environment:
+# Typical order — local (Docker volume missing the role, or repair):
 #   1) ./scripts/provision_app_role.sh          # create role + LOGIN/PASSWORD
-#   2) uv run alembic upgrade head             # schema + GRANT DML/EXECUTE
+#   2) uv run alembic upgrade head             # as envvault_user (compose superuser)
+#
+# Typical order — staging/prod (superuser one-shot, then CI):
+#   1) ./scripts/provision_migration_role.sh   # envvault_migrate + schema owner
+#   2) ./scripts/provision_app_role.sh         # envvault_app (this script)
+#   3) Alembic as envvault_migrate (MIGRATION_POSTGRES_*)
+#   4) Runtime as envvault_app (POSTGRES_*)
+#   See also: scripts/provision_migration_role.sh and backend/README.md
 #
 # --grants remains available for repairing privileges without re-running
 # migrations; alembic upgrade head already applies DML GRANTs when the role
@@ -37,8 +44,24 @@
 # =============================================================================
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
 cd "$ROOT"
+
+DO_GRANTS=0
+for arg in "$@"; do
+  case "$arg" in
+    --grants) DO_GRANTS=1 ;;
+    -h|--help)
+      sed -n '2,42p' "$SCRIPT_PATH"
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $arg" >&2
+      exit 1
+      ;;
+  esac
+done
 
 APP_DB_USER="${APP_DB_USER:-envvault_app}"
 APP_DB_PASSWORD="${APP_DB_PASSWORD:?Set APP_DB_PASSWORD before provisioning envvault_app}"
@@ -50,21 +73,6 @@ POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-envvault_secure_password}"
 POSTGRES_DB="${POSTGRES_DB:-envvault_dev}"
 
 DATABASE_URL="${DATABASE_URL:-postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_SERVER}:${POSTGRES_PORT}/${POSTGRES_DB}}"
-
-DO_GRANTS=0
-for arg in "$@"; do
-  case "$arg" in
-    --grants) DO_GRANTS=1 ;;
-    -h|--help)
-      sed -n '2,35p' "$0"
-      exit 0
-      ;;
-    *)
-      echo "Unknown argument: $arg" >&2
-      exit 1
-      ;;
-  esac
-done
 
 if ! command -v psql >/dev/null 2>&1; then
   echo "psql is required to provision database roles." >&2
@@ -131,4 +139,4 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 EOSQL
 fi
 
-echo "Done. Application runtime must connect as '${APP_DB_USER}' (not the migration superuser)."
+echo "Done. Application runtime must connect as '${APP_DB_USER}' (not the migration role)."
