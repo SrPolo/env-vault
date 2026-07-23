@@ -332,6 +332,16 @@ ALTER TABLE encryption_keys FORCE ROW LEVEL SECURITY;
 ALTER TABLE api_tokens      FORCE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs      FORCE ROW LEVEL SECURITY;
 
+
+-- Lectura segura de GUCs de sesión: '' (o unset) → NULL, nunca ''::uuid.
+CREATE OR REPLACE FUNCTION app_setting_uuid(p_name text)
+RETURNS uuid
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT NULLIF(current_setting(p_name, true), '')::uuid;
+$$;
+
 CREATE OR REPLACE FUNCTION current_user_belongs_to_current_org()
 RETURNS BOOLEAN
 LANGUAGE SQL
@@ -340,10 +350,60 @@ AS $$
     SELECT EXISTS (
         SELECT 1
         FROM memberships m
-        WHERE m.organization_id = current_setting('app.current_org_id', true)::uuid
-          AND m.user_id = current_setting('app.current_user_id', true)::uuid
+        WHERE m.organization_id = app_setting_uuid('app.current_org_id')
+          AND m.user_id = app_setting_uuid('app.current_user_id')
     );
 $$;
+
+-- Bootstrap de organización bajo FORCE RLS.
+-- INSERT ... RETURNING evalúa también la policy SELECT (que exige membership),
+-- así que org+owner se crean de forma atómica como SECURITY DEFINER.
+-- EXECUTE solo para envvault_app (nunca PUBLIC).
+CREATE OR REPLACE FUNCTION create_organization_with_owner(
+    p_name text,
+    p_slug text,
+    p_user_id uuid
+)
+RETURNS organizations
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    new_org organizations;
+    actor text := current_setting('app.current_user_id', true);
+BEGIN
+    IF NULLIF(actor, '') IS NULL THEN
+        RAISE EXCEPTION 'app.current_user_id must be set to create an organization'
+            USING ERRCODE = '42501';
+    END IF;
+
+    IF actor::uuid IS DISTINCT FROM p_user_id THEN
+        RAISE EXCEPTION 'p_user_id must match app.current_user_id'
+            USING ERRCODE = '42501';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_user_id) THEN
+        RAISE EXCEPTION 'user % does not exist', p_user_id
+            USING ERRCODE = '23503';
+    END IF;
+
+    INSERT INTO organizations (name, slug)
+    VALUES (p_name, p_slug)
+    RETURNING * INTO new_org;
+
+    INSERT INTO memberships (user_id, organization_id, role)
+    VALUES (p_user_id, new_org.id, 'owner');
+
+    RETURN new_org;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION create_organization_with_owner(text, text, uuid) FROM PUBLIC;
+-- Requiere que envvault_app ya exista (NO se crea aquí).
+-- Provisioning: backend/scripts/provision_app_role.sh  (LOGIN + PASSWORD fuera de Alembic)
+-- Ver backend/README.md → "Database roles".
+GRANT EXECUTE ON FUNCTION create_organization_with_owner(text, text, uuid) TO envvault_app;
 
 CREATE POLICY org_context_member_projects ON projects
     AS RESTRICTIVE
@@ -389,7 +449,7 @@ CREATE POLICY org_context_member_audit_logs ON audit_logs
 
 CREATE POLICY org_memberships_select ON memberships
     FOR SELECT
-    USING (user_id = current_setting('app.current_user_id', true)::uuid);
+    USING (user_id = app_setting_uuid('app.current_user_id'));
 
 CREATE POLICY org_memberships_insert ON memberships
     FOR INSERT
@@ -399,13 +459,13 @@ CREATE POLICY org_memberships_insert ON memberships
                 SELECT 1
                 FROM memberships actor
                 WHERE actor.organization_id = memberships.organization_id
-                  AND actor.user_id = current_setting('app.current_user_id', true)::uuid
+                  AND actor.user_id = app_setting_uuid('app.current_user_id')
                   AND actor.role IN ('owner', 'admin')
             )
             AND memberships.role IN ('admin', 'member', 'viewer')
         )
         OR (
-            memberships.user_id = current_setting('app.current_user_id', true)::uuid
+            memberships.user_id = app_setting_uuid('app.current_user_id')
             AND memberships.role = 'owner'
             AND NOT EXISTS (
                 SELECT 1
@@ -422,7 +482,7 @@ CREATE POLICY org_memberships_update ON memberships
             SELECT 1
             FROM memberships actor
             WHERE actor.organization_id = memberships.organization_id
-              AND actor.user_id = current_setting('app.current_user_id', true)::uuid
+              AND actor.user_id = app_setting_uuid('app.current_user_id')
               AND actor.role IN ('owner', 'admin')
         )
     )
@@ -431,7 +491,7 @@ CREATE POLICY org_memberships_update ON memberships
             SELECT 1
             FROM memberships actor
             WHERE actor.organization_id = memberships.organization_id
-              AND actor.user_id = current_setting('app.current_user_id', true)::uuid
+              AND actor.user_id = app_setting_uuid('app.current_user_id')
               AND actor.role IN ('owner', 'admin')
         )
         AND (
@@ -440,7 +500,7 @@ CREATE POLICY org_memberships_update ON memberships
                 SELECT 1
                 FROM memberships actor_owner
                 WHERE actor_owner.organization_id = memberships.organization_id
-                  AND actor_owner.user_id = current_setting('app.current_user_id', true)::uuid
+                  AND actor_owner.user_id = app_setting_uuid('app.current_user_id')
                   AND actor_owner.role = 'owner'
             )
         )
@@ -453,16 +513,16 @@ CREATE POLICY org_memberships_delete ON memberships
             SELECT 1
             FROM memberships actor
             WHERE actor.organization_id = memberships.organization_id
-              AND actor.user_id = current_setting('app.current_user_id', true)::uuid
+              AND actor.user_id = app_setting_uuid('app.current_user_id')
               AND actor.role IN ('owner', 'admin')
         )
         AND (
-            memberships.user_id <> current_setting('app.current_user_id', true)::uuid
+            memberships.user_id <> app_setting_uuid('app.current_user_id')
             OR EXISTS (
                 SELECT 1
                 FROM memberships actor_owner
                 WHERE actor_owner.organization_id = memberships.organization_id
-                  AND actor_owner.user_id = current_setting('app.current_user_id', true)::uuid
+                  AND actor_owner.user_id = app_setting_uuid('app.current_user_id')
                   AND actor_owner.role = 'owner'
             )
         )
@@ -475,13 +535,13 @@ CREATE POLICY org_organizations_select ON organizations
             SELECT 1
             FROM memberships m
             WHERE m.organization_id = organizations.id
-              AND m.user_id = current_setting('app.current_user_id', true)::uuid
+              AND m.user_id = app_setting_uuid('app.current_user_id')
         )
     );
 
 CREATE POLICY org_organizations_insert ON organizations
     FOR INSERT
-    WITH CHECK (current_setting('app.current_user_id', true) IS NOT NULL);
+    WITH CHECK (app_setting_uuid('app.current_user_id') IS NOT NULL);
 
 CREATE POLICY org_organizations_update ON organizations
     FOR UPDATE
@@ -490,7 +550,7 @@ CREATE POLICY org_organizations_update ON organizations
             SELECT 1
             FROM memberships m
             WHERE m.organization_id = organizations.id
-              AND m.user_id = current_setting('app.current_user_id', true)::uuid
+              AND m.user_id = app_setting_uuid('app.current_user_id')
               AND m.role IN ('owner', 'admin')
         )
     )
@@ -499,7 +559,7 @@ CREATE POLICY org_organizations_update ON organizations
             SELECT 1
             FROM memberships m
             WHERE m.organization_id = organizations.id
-              AND m.user_id = current_setting('app.current_user_id', true)::uuid
+              AND m.user_id = app_setting_uuid('app.current_user_id')
               AND m.role IN ('owner', 'admin')
         )
     );
@@ -511,58 +571,58 @@ CREATE POLICY org_organizations_delete ON organizations
             SELECT 1
             FROM memberships m
             WHERE m.organization_id = organizations.id
-              AND m.user_id = current_setting('app.current_user_id', true)::uuid
+              AND m.user_id = app_setting_uuid('app.current_user_id')
               AND m.role = 'owner'
         )
     );
 
 CREATE POLICY org_isolation_projects_select ON projects
     FOR SELECT
-    USING (organization_id = current_setting('app.current_org_id', true)::uuid);
+    USING (organization_id = app_setting_uuid('app.current_org_id'));
 
 CREATE POLICY org_isolation_projects_insert ON projects
     FOR INSERT
-    WITH CHECK (organization_id = current_setting('app.current_org_id', true)::uuid);
+    WITH CHECK (organization_id = app_setting_uuid('app.current_org_id'));
 
 CREATE POLICY org_isolation_projects_update ON projects
     FOR UPDATE
-    USING (organization_id = current_setting('app.current_org_id', true)::uuid)
-    WITH CHECK (organization_id = current_setting('app.current_org_id', true)::uuid);
+    USING (organization_id = app_setting_uuid('app.current_org_id'))
+    WITH CHECK (organization_id = app_setting_uuid('app.current_org_id'));
 
 CREATE POLICY org_isolation_projects_delete ON projects
     FOR DELETE
-    USING (organization_id = current_setting('app.current_org_id', true)::uuid);
+    USING (organization_id = app_setting_uuid('app.current_org_id'));
 
 CREATE POLICY org_isolation_environments_select ON environments
     FOR SELECT
     USING (project_id IN (
         SELECT id FROM projects
-        WHERE organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_environments_insert ON environments
     FOR INSERT
     WITH CHECK (project_id IN (
         SELECT id FROM projects
-        WHERE organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_environments_update ON environments
     FOR UPDATE
     USING (project_id IN (
         SELECT id FROM projects
-        WHERE organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE organization_id = app_setting_uuid('app.current_org_id')
     ))
     WITH CHECK (project_id IN (
         SELECT id FROM projects
-        WHERE organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_environments_delete ON environments
     FOR DELETE
     USING (project_id IN (
         SELECT id FROM projects
-        WHERE organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_secrets_select ON secrets
@@ -570,7 +630,7 @@ CREATE POLICY org_isolation_secrets_select ON secrets
     USING (environment_id IN (
         SELECT e.id FROM environments e
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_secrets_insert ON secrets
@@ -578,7 +638,7 @@ CREATE POLICY org_isolation_secrets_insert ON secrets
     WITH CHECK (environment_id IN (
         SELECT e.id FROM environments e
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_secrets_update ON secrets
@@ -586,12 +646,12 @@ CREATE POLICY org_isolation_secrets_update ON secrets
     USING (environment_id IN (
         SELECT e.id FROM environments e
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ))
     WITH CHECK (environment_id IN (
         SELECT e.id FROM environments e
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_secrets_delete ON secrets
@@ -599,7 +659,7 @@ CREATE POLICY org_isolation_secrets_delete ON secrets
     USING (environment_id IN (
         SELECT e.id FROM environments e
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_secret_versions_select ON secret_versions
@@ -608,7 +668,7 @@ CREATE POLICY org_isolation_secret_versions_select ON secret_versions
         SELECT s.id FROM secrets s
         JOIN environments e ON e.id = s.environment_id
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_secret_versions_insert ON secret_versions
@@ -617,7 +677,7 @@ CREATE POLICY org_isolation_secret_versions_insert ON secret_versions
         SELECT s.id FROM secrets s
         JOIN environments e ON e.id = s.environment_id
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_secret_versions_update ON secret_versions
@@ -626,13 +686,13 @@ CREATE POLICY org_isolation_secret_versions_update ON secret_versions
         SELECT s.id FROM secrets s
         JOIN environments e ON e.id = s.environment_id
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ))
     WITH CHECK (secret_id IN (
         SELECT s.id FROM secrets s
         JOIN environments e ON e.id = s.environment_id
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_secret_versions_delete ON secret_versions
@@ -641,7 +701,7 @@ CREATE POLICY org_isolation_secret_versions_delete ON secret_versions
         SELECT s.id FROM secrets s
         JOIN environments e ON e.id = s.environment_id
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_encryption_keys_select ON encryption_keys
@@ -649,7 +709,7 @@ CREATE POLICY org_isolation_encryption_keys_select ON encryption_keys
     USING (environment_id IN (
         SELECT e.id FROM environments e
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_encryption_keys_insert ON encryption_keys
@@ -657,7 +717,7 @@ CREATE POLICY org_isolation_encryption_keys_insert ON encryption_keys
     WITH CHECK (environment_id IN (
         SELECT e.id FROM environments e
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_encryption_keys_update ON encryption_keys
@@ -665,12 +725,12 @@ CREATE POLICY org_isolation_encryption_keys_update ON encryption_keys
     USING (environment_id IN (
         SELECT e.id FROM environments e
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ))
     WITH CHECK (environment_id IN (
         SELECT e.id FROM environments e
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_encryption_keys_delete ON encryption_keys
@@ -678,63 +738,64 @@ CREATE POLICY org_isolation_encryption_keys_delete ON encryption_keys
     USING (environment_id IN (
         SELECT e.id FROM environments e
         JOIN projects p ON p.id = e.project_id
-        WHERE p.organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE p.organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_api_tokens_select ON api_tokens
     FOR SELECT
     USING (project_id IN (
         SELECT id FROM projects
-        WHERE organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_api_tokens_insert ON api_tokens
     FOR INSERT
     WITH CHECK (project_id IN (
         SELECT id FROM projects
-        WHERE organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_api_tokens_update ON api_tokens
     FOR UPDATE
     USING (project_id IN (
         SELECT id FROM projects
-        WHERE organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE organization_id = app_setting_uuid('app.current_org_id')
     ))
     WITH CHECK (project_id IN (
         SELECT id FROM projects
-        WHERE organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_api_tokens_delete ON api_tokens
     FOR DELETE
     USING (project_id IN (
         SELECT id FROM projects
-        WHERE organization_id = current_setting('app.current_org_id', true)::uuid
+        WHERE organization_id = app_setting_uuid('app.current_org_id')
     ));
 
 CREATE POLICY org_isolation_audit_logs_select ON audit_logs
     FOR SELECT
-    USING (organization_id = current_setting('app.current_org_id', true)::uuid);
+    USING (organization_id = app_setting_uuid('app.current_org_id'));
 
 CREATE POLICY org_isolation_audit_logs_insert ON audit_logs
     FOR INSERT
-    WITH CHECK (organization_id = current_setting('app.current_org_id', true)::uuid);
+    WITH CHECK (organization_id = app_setting_uuid('app.current_org_id'));
 
 CREATE POLICY org_isolation_audit_logs_update ON audit_logs
     FOR UPDATE
-    USING (organization_id = current_setting('app.current_org_id', true)::uuid)
-    WITH CHECK (organization_id = current_setting('app.current_org_id', true)::uuid);
+    USING (organization_id = app_setting_uuid('app.current_org_id'))
+    WITH CHECK (organization_id = app_setting_uuid('app.current_org_id'));
 
 CREATE POLICY org_isolation_audit_logs_delete ON audit_logs
     FOR DELETE
-    USING (organization_id = current_setting('app.current_org_id', true)::uuid);
+    USING (organization_id = app_setting_uuid('app.current_org_id'));
 
--- NOTA: el rol de aplicación (ej. `envvault_app`) debe conectarse SIN BYPASSRLS.
--- El superusuario/rol de migraciones sí necesita bypass para Alembic.
--- Ejemplo:
---   CREATE ROLE envvault_app LOGIN PASSWORD '...' NOBYPASSRLS;
---   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO envvault_app;
+-- Rol de aplicación: SIN BYPASSRLS (los superusers ignoran FORCE RLS).
+-- Creación + LOGIN/PASSWORD: fuera de este archivo y fuera de Alembic.
+--   backend/scripts/provision_app_role.sh
+--   (requiere conectar como superuser o rol con CREATEROLE)
+-- Después de crear tablas: ./scripts/provision_app_role.sh --grants
+-- Documentación: backend/README.md → "Database roles".
 
 -- ============================================================================
 -- FIN DEL ESQUEMA BASE

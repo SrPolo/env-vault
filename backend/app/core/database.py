@@ -22,18 +22,19 @@ async def set_rls_context(
     """
     Sets PostgreSQL row-level security (RLS) contexts for the current transaction.
     Uses local (transaction-scoped) configuration so it resets automatically upon commit/rollback.
-    """
-    if user_id:
-        await session.execute(
-            sa.text("SELECT set_config('app.current_user_id', :user_id, true)"),
-            {"user_id": str(user_id)},
-        )
 
-    if org_id:
-        await session.execute(
-            sa.text("SELECT set_config('app.current_org_id', :org_id, true)"),
-            {"org_id": str(org_id)},
-        )
+    Always writes both GUCs (empty string when unset) so pooled connections cannot
+    leak a previous org/user into the next transaction. Policies must read them via
+    app_setting_uuid() / NULLIF so '' does not break uuid casts.
+    """
+    await session.execute(
+        sa.text("SELECT set_config('app.current_user_id', :user_id, true)"),
+        {"user_id": str(user_id) if user_id else ""},
+    )
+    await session.execute(
+        sa.text("SELECT set_config('app.current_org_id', :org_id, true)"),
+        {"org_id": str(org_id) if org_id else ""},
+    )
 
 
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:

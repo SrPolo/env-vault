@@ -1,4 +1,5 @@
 import asyncio
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import pool
@@ -12,7 +13,12 @@ from app.models import Base
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
-config.set_main_option("sqlalchemy.url", str(settings.SQLALCHEMY_DATABASE_URI))
+# ENVVAULT_DATABASE_URL lets tests (and CI) point Alembic at a throwaway DB
+# without mutating application Settings.
+config.set_main_option(
+    "sqlalchemy.url",
+    os.environ.get("ENVVAULT_DATABASE_URL", str(settings.SQLALCHEMY_DATABASE_URI)),
+)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
