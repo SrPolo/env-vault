@@ -11,6 +11,7 @@ from app.repositories import (
     MembershipRepository,
     OrganizationRepository,
     ProjectRepository,
+    RefreshTokenRepository,
     SecretRepository,
     SecretVersionRepository,
     UserRepository,
@@ -24,6 +25,7 @@ class AbstractUnitOfWork:
     """
 
     users: UserRepository
+    refresh_tokens: RefreshTokenRepository
     organizations: OrganizationRepository
     memberships: MembershipRepository
     projects: ProjectRepository
@@ -80,6 +82,7 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
 
         # Instantiate repositories with the current session
         self.users = UserRepository(self.session)
+        self.refresh_tokens = RefreshTokenRepository(self.session)
         self.organizations = OrganizationRepository(self.session)
         self.memberships = MembershipRepository(self.session)
         self.projects = ProjectRepository(self.session)

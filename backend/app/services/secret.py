@@ -3,6 +3,8 @@ from uuid import UUID
 from app.core.uow import AbstractUnitOfWork
 from app.models.secret import Secret, SecretVersion
 from app.services.crypto import CryptoService
+from app.services.environment import EnvironmentNotFoundError
+from app.services.rbac import InsufficientRoleError, require_org_role
 
 
 class SecretNotFoundError(Exception):
@@ -21,26 +23,68 @@ class SecretService:
     """
     Orchestrates secret management: creation, updating (versioning), retrieval, and deletion.
     Works closely with CryptoService for encryption/decryption and AbstractUnitOfWork for persistence.
+
+    RBAC: mutations and plaintext reveals require 'member' or above; 'viewer' is
+    limited to metadata (key names, versions) and never sees decrypted values.
     """
 
     def __init__(self, crypto_service: CryptoService):
         self.crypto = crypto_service
 
+    async def _resolve_environment_org(
+        self,
+        uow: AbstractUnitOfWork,
+        environment_id: UUID | str,
+        organization_id: UUID | str,
+    ) -> None:
+        """
+        Verify the environment belongs to the caller's organization.
+
+        RLS already scopes rows to app.current_org_id, but this keeps the service
+        correct even if it is ever driven with a different context (jobs, CLI).
+        """
+        environment = await uow.environments.get(environment_id)
+        if environment is None:
+            raise EnvironmentNotFoundError("Environment not found.")
+
+        project = await uow.projects.get(environment.project_id)
+        if project is None or str(project.organization_id) != str(organization_id):
+            raise EnvironmentNotFoundError("Environment not found.")
+
+    async def _get_owned_secret(
+        self,
+        uow: AbstractUnitOfWork,
+        secret_id: UUID | str,
+        organization_id: UUID | str,
+    ) -> Secret:
+        secret = await uow.secrets.get(secret_id)
+        if secret is None or secret.is_deleted:
+            raise SecretNotFoundError("Secret not found or deleted.")
+        await self._resolve_environment_org(uow, secret.environment_id, organization_id)
+        return secret
+
     async def create_secret(
         self,
         uow: AbstractUnitOfWork,
         environment_id: UUID | str,
+        *,
+        organization_id: UUID | str,
         key_name: str,
         plain_value: str,
-        user_id: UUID | str | None = None,
+        actor_user_id: UUID | str,
     ) -> Secret:
         """
         Creates a new secret and its initial version securely.
         """
+        await require_org_role(uow, organization_id, actor_user_id, "member")
+        await self._resolve_environment_org(uow, environment_id, organization_id)
+
         # 1. Verify uniqueness
         existing = await uow.secrets.get_by_environment_and_name(environment_id, key_name)
         if existing:
-            raise SecretAlreadyExistsError(f"Secret '{key_name}' already exists in this environment.")
+            raise SecretAlreadyExistsError(
+                f"Secret '{key_name}' already exists in this environment."
+            )
 
         # 2. Get the active Data Encryption Key (DEK) for the environment
         enc_key = await uow.encryption_keys.get_active_for_environment(environment_id)
@@ -53,7 +97,7 @@ class SecretService:
         # 4. Create the parent Secret record
         secret = Secret(environment_id=environment_id, key_name=key_name)
         uow.secrets.add(secret)
-        
+
         # Flush to DB to let PostgreSQL generate the UUID for `secret.id`
         await uow.flush()
 
@@ -64,16 +108,16 @@ class SecretService:
             encrypted_value=encrypted_value,
             iv=iv,
             version_number=1,
-            created_by=user_id,
+            created_by=actor_user_id,
         )
         uow.secret_versions.add(version)
-        
+
         # Flush again to get the `version.id`
         await uow.flush()
 
         # 6. Update the pointer to the current version
         secret.current_version_id = version.id
-        
+
         # 7. Commit the transaction
         await uow.commit()
         return secret
@@ -82,15 +126,16 @@ class SecretService:
         self,
         uow: AbstractUnitOfWork,
         secret_id: UUID | str,
+        *,
+        organization_id: UUID | str,
         plain_value: str,
-        user_id: UUID | str | None = None,
+        actor_user_id: UUID | str,
     ) -> SecretVersion:
         """
         Rotates/Updates a secret by creating a new version with the new encrypted value.
         """
-        secret = await uow.secrets.get(secret_id)
-        if not secret or secret.is_deleted:
-            raise SecretNotFoundError("Secret not found or deleted.")
+        await require_org_role(uow, organization_id, actor_user_id, "member")
+        secret = await self._get_owned_secret(uow, secret_id, organization_id)
 
         enc_key = await uow.encryption_keys.get_active_for_environment(secret.environment_id)
         if not enc_key:
@@ -109,7 +154,7 @@ class SecretService:
             encrypted_value=encrypted_value,
             iv=iv,
             version_number=new_version_number,
-            created_by=user_id,
+            created_by=actor_user_id,
         )
         uow.secret_versions.add(version)
         await uow.flush()
@@ -117,18 +162,37 @@ class SecretService:
         # Update pointer
         secret.current_version_id = version.id
         await uow.commit()
-        
+
         return version
 
+    async def list_secrets(
+        self,
+        uow: AbstractUnitOfWork,
+        environment_id: UUID | str,
+        *,
+        organization_id: UUID | str,
+        actor_user_id: UUID | str,
+    ) -> list[Secret]:
+        """
+        Lists secret metadata (never values). Viewers are allowed here.
+        """
+        await require_org_role(uow, organization_id, actor_user_id, "viewer")
+        await self._resolve_environment_org(uow, environment_id, organization_id)
+        return await uow.secrets.list_by_environment(environment_id)
+
     async def get_decrypted_value(
-        self, uow: AbstractUnitOfWork, secret_id: UUID | str
+        self,
+        uow: AbstractUnitOfWork,
+        secret_id: UUID | str,
+        *,
+        organization_id: UUID | str,
+        actor_user_id: UUID | str,
     ) -> str:
         """
         Fetches the current version of a secret and decrypts its value.
         """
-        secret = await uow.secrets.get(secret_id)
-        if not secret or secret.is_deleted:
-            raise SecretNotFoundError("Secret not found.")
+        await require_org_role(uow, organization_id, actor_user_id, "member")
+        secret = await self._get_owned_secret(uow, secret_id, organization_id)
 
         if not secret.current_version_id:
             raise ValueError("Secret has no active versions.")
@@ -147,13 +211,29 @@ class SecretService:
         )
         return plain_value
 
-    async def delete_secret(self, uow: AbstractUnitOfWork, secret_id: UUID | str) -> None:
+    async def delete_secret(
+        self,
+        uow: AbstractUnitOfWork,
+        secret_id: UUID | str,
+        *,
+        organization_id: UUID | str,
+        actor_user_id: UUID | str,
+    ) -> None:
         """
         Soft deletes a secret.
         """
-        secret = await uow.secrets.get(secret_id)
-        if not secret or secret.is_deleted:
-            raise SecretNotFoundError("Secret not found or already deleted.")
-            
+        await require_org_role(uow, organization_id, actor_user_id, "member")
+        secret = await self._get_owned_secret(uow, secret_id, organization_id)
+
         await uow.secrets.soft_delete(secret.id)
         await uow.commit()
+
+
+__all__ = [
+    "SecretService",
+    "SecretNotFoundError",
+    "SecretAlreadyExistsError",
+    "EncryptionKeyNotFoundError",
+    "EnvironmentNotFoundError",
+    "InsufficientRoleError",
+]

@@ -159,15 +159,24 @@ async def test_create_project_and_environment_with_active_dek(
     async with _uow(session_factory, user_id=user.id, org_id=org.id) as uow:
         secret = await secret_service.create_secret(
             uow,
-            environment_id=environment.id,
+            environment.id,
+            organization_id=org.id,
             key_name="SMOKE_KEY",
             plain_value="smoke-value",
-            user_id=user.id,
+            actor_user_id=user.id,
         )
 
     async with _uow(session_factory, user_id=user.id, org_id=org.id) as uow:
         assert secret.current_version_id is not None
-        assert await secret_service.get_decrypted_value(uow, secret.id) == "smoke-value"
+        assert (
+            await secret_service.get_decrypted_value(
+                uow,
+                secret.id,
+                organization_id=org.id,
+                actor_user_id=user.id,
+            )
+            == "smoke-value"
+        )
 
 
 @pytest.mark.asyncio

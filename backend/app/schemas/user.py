@@ -8,7 +8,8 @@ class UserBase(BaseModel):
     """Base properties shared across user schemas."""
 
     email: EmailStr
-    name: str = Field(min_length=1, max_length=255)
+    # Mirrors User.full_name, which is nullable (OAuth sign-ups may not provide it).
+    full_name: str | None = Field(None, min_length=1, max_length=255)
 
 
 class UserCreate(UserBase):
@@ -21,7 +22,7 @@ class UserUpdate(BaseModel):
     """Properties to receive via API on update."""
 
     email: EmailStr | None = None
-    name: str | None = Field(None, min_length=1, max_length=255)
+    full_name: str | None = Field(None, min_length=1, max_length=255)
     password: str | None = Field(None, min_length=8, max_length=128)
 
 

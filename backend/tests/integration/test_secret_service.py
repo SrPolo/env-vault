@@ -1,20 +1,43 @@
 import pytest
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.secret import Secret, SecretVersion
+from app.models.user import User
 from app.services.crypto import CryptoService
+from app.services.membership import MembershipService
+from app.services.environment import EnvironmentNotFoundError
+from app.services.rbac import InsufficientRoleError, MembershipRequiredError
 from app.services.secret import (
     EncryptionKeyNotFoundError,
     SecretAlreadyExistsError,
     SecretNotFoundError,
     SecretService,
 )
-from tests.factories import TenantFixture
+from tests.factories import TenantFixture, seed_tenant
 
 
 @pytest.fixture
 def secret_service(crypto_service: CryptoService) -> SecretService:
     return SecretService(crypto_service)
+
+
+@pytest.fixture
+def membership_service() -> MembershipService:
+    return MembershipService()
+
+
+async def _create_user(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    email: str,
+) -> User:
+    async with session_factory() as session:
+        user = User(email=email, password_hash="not-a-real-hash", full_name="Test User")
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+        return user
 
 
 @pytest.mark.asyncio
@@ -26,10 +49,11 @@ async def test_create_secret_persists_encrypted_value(
     async with uow_factory() as uow:
         secret = await secret_service.create_secret(
             uow,
-            environment_id=tenant.environment_id,
+            tenant.environment_id,
+            organization_id=tenant.org_id,
             key_name="DATABASE_URL",
             plain_value="postgres://user:pass@db/app",
-            user_id=tenant.user_id,
+            actor_user_id=tenant.user_id,
         )
 
     assert secret.id is not None
@@ -48,7 +72,12 @@ async def test_create_secret_persists_encrypted_value(
     assert len(version.iv) == 12
 
     async with uow_factory() as uow:
-        plain = await secret_service.get_decrypted_value(uow, secret.id)
+        plain = await secret_service.get_decrypted_value(
+            uow,
+            secret.id,
+            organization_id=tenant.org_id,
+            actor_user_id=tenant.user_id,
+        )
     assert plain == "postgres://user:pass@db/app"
 
 
@@ -61,20 +90,22 @@ async def test_create_secret_rejects_duplicate_key_name(
     async with uow_factory() as uow:
         await secret_service.create_secret(
             uow,
-            environment_id=tenant.environment_id,
+            tenant.environment_id,
+            organization_id=tenant.org_id,
             key_name="API_KEY",
             plain_value="v1",
-            user_id=tenant.user_id,
+            actor_user_id=tenant.user_id,
         )
 
     async with uow_factory() as uow:
         with pytest.raises(SecretAlreadyExistsError):
             await secret_service.create_secret(
                 uow,
-                environment_id=tenant.environment_id,
+                tenant.environment_id,
+                organization_id=tenant.org_id,
                 key_name="API_KEY",
                 plain_value="v2",
-                user_id=tenant.user_id,
+                actor_user_id=tenant.user_id,
             )
 
 
@@ -87,19 +118,21 @@ async def test_add_new_version_rotates_pointer(
     async with uow_factory() as uow:
         secret = await secret_service.create_secret(
             uow,
-            environment_id=tenant.environment_id,
+            tenant.environment_id,
+            organization_id=tenant.org_id,
             key_name="TOKEN",
             plain_value="version-1",
-            user_id=tenant.user_id,
+            actor_user_id=tenant.user_id,
         )
         first_version_id = secret.current_version_id
 
     async with uow_factory() as uow:
         new_version = await secret_service.add_new_version(
             uow,
-            secret_id=secret.id,
+            secret.id,
+            organization_id=tenant.org_id,
             plain_value="version-2",
-            user_id=tenant.user_id,
+            actor_user_id=tenant.user_id,
         )
 
     assert new_version.version_number == 2
@@ -109,7 +142,15 @@ async def test_add_new_version_rotates_pointer(
         refreshed = await uow.secrets.get(secret.id)
         assert refreshed is not None
         assert refreshed.current_version_id == new_version.id
-        assert await secret_service.get_decrypted_value(uow, secret.id) == "version-2"
+        assert (
+            await secret_service.get_decrypted_value(
+                uow,
+                secret.id,
+                organization_id=tenant.org_id,
+                actor_user_id=tenant.user_id,
+            )
+            == "version-2"
+        )
 
         # Previous version remains stored for history
         old = await uow.secret_versions.get(first_version_id)
@@ -126,21 +167,37 @@ async def test_soft_delete_hides_secret_from_reads(
     async with uow_factory() as uow:
         secret = await secret_service.create_secret(
             uow,
-            environment_id=tenant.environment_id,
+            tenant.environment_id,
+            organization_id=tenant.org_id,
             key_name="TO_DELETE",
             plain_value="bye",
-            user_id=tenant.user_id,
+            actor_user_id=tenant.user_id,
         )
 
     async with uow_factory() as uow:
-        await secret_service.delete_secret(uow, secret.id)
+        await secret_service.delete_secret(
+            uow,
+            secret.id,
+            organization_id=tenant.org_id,
+            actor_user_id=tenant.user_id,
+        )
 
     async with uow_factory() as uow:
         with pytest.raises(SecretNotFoundError):
-            await secret_service.get_decrypted_value(uow, secret.id)
+            await secret_service.get_decrypted_value(
+                uow,
+                secret.id,
+                organization_id=tenant.org_id,
+                actor_user_id=tenant.user_id,
+            )
 
         with pytest.raises(SecretNotFoundError):
-            await secret_service.delete_secret(uow, secret.id)
+            await secret_service.delete_secret(
+                uow,
+                secret.id,
+                organization_id=tenant.org_id,
+                actor_user_id=tenant.user_id,
+            )
 
         # Soft-deleted row still exists, but lookup-by-name ignores it
         by_name = await uow.secrets.get_by_environment_and_name(
@@ -170,10 +227,11 @@ async def test_create_secret_requires_active_encryption_key(
         with pytest.raises(EncryptionKeyNotFoundError):
             await secret_service.create_secret(
                 uow,
-                environment_id=tenant.environment_id,
+                tenant.environment_id,
+                organization_id=tenant.org_id,
                 key_name="NO_KEY",
                 plain_value="x",
-                user_id=tenant.user_id,
+                actor_user_id=tenant.user_id,
             )
 
 
@@ -188,10 +246,11 @@ async def test_plaintext_never_stored_in_secret_tables(
     async with uow_factory() as uow:
         secret = await secret_service.create_secret(
             uow,
-            environment_id=tenant.environment_id,
+            tenant.environment_id,
+            organization_id=tenant.org_id,
             key_name="CHECK_PLAINTEXT",
             plain_value=plain,
-            user_id=tenant.user_id,
+            actor_user_id=tenant.user_id,
         )
 
     async with uow_factory() as uow:
@@ -210,3 +269,137 @@ async def test_plaintext_never_stored_in_secret_tables(
         assert needle not in version.iv
     for row in secrets:
         assert needle not in row.key_name.encode("utf-8")
+
+
+@pytest.mark.asyncio
+async def test_viewer_can_list_metadata_but_not_write_or_reveal(
+    session_factory: async_sessionmaker[AsyncSession],
+    uow_factory,
+    tenant: TenantFixture,
+    secret_service: SecretService,
+    membership_service: MembershipService,
+) -> None:
+    viewer = await _create_user(session_factory, email="secret-viewer@example.com")
+
+    async with uow_factory() as uow:
+        await membership_service.invite(
+            uow,
+            tenant.org_id,
+            email=viewer.email,
+            role="viewer",
+            actor_user_id=tenant.user_id,
+        )
+
+    async with uow_factory() as uow:
+        secret = await secret_service.create_secret(
+            uow,
+            tenant.environment_id,
+            organization_id=tenant.org_id,
+            key_name="VIEWER_SCOPE",
+            plain_value="top-secret",
+            actor_user_id=tenant.user_id,
+        )
+
+    # Metadata is allowed for viewers.
+    async with uow_factory(user_id=str(viewer.id)) as uow:
+        listed = await secret_service.list_secrets(
+            uow,
+            tenant.environment_id,
+            organization_id=tenant.org_id,
+            actor_user_id=viewer.id,
+        )
+    assert [s.key_name for s in listed] == ["VIEWER_SCOPE"]
+
+    # Reveal and every mutation are not.
+    async with uow_factory(user_id=str(viewer.id)) as uow:
+        with pytest.raises(InsufficientRoleError):
+            await secret_service.get_decrypted_value(
+                uow,
+                secret.id,
+                organization_id=tenant.org_id,
+                actor_user_id=viewer.id,
+            )
+
+    async with uow_factory(user_id=str(viewer.id)) as uow:
+        with pytest.raises(InsufficientRoleError):
+            await secret_service.create_secret(
+                uow,
+                tenant.environment_id,
+                organization_id=tenant.org_id,
+                key_name="VIEWER_WRITE",
+                plain_value="nope",
+                actor_user_id=viewer.id,
+            )
+
+    async with uow_factory(user_id=str(viewer.id)) as uow:
+        with pytest.raises(InsufficientRoleError):
+            await secret_service.add_new_version(
+                uow,
+                secret.id,
+                organization_id=tenant.org_id,
+                plain_value="nope",
+                actor_user_id=viewer.id,
+            )
+
+    async with uow_factory(user_id=str(viewer.id)) as uow:
+        with pytest.raises(InsufficientRoleError):
+            await secret_service.delete_secret(
+                uow,
+                secret.id,
+                organization_id=tenant.org_id,
+                actor_user_id=viewer.id,
+            )
+
+
+@pytest.mark.asyncio
+async def test_non_member_cannot_touch_secrets(
+    session_factory: async_sessionmaker[AsyncSession],
+    uow_factory,
+    tenant: TenantFixture,
+    secret_service: SecretService,
+) -> None:
+    """A user with no membership in the org is rejected before any DB read."""
+    outsider = await _create_user(session_factory, email="outsider@example.com")
+
+    async with uow_factory(user_id=str(outsider.id)) as uow:
+        with pytest.raises(MembershipRequiredError):
+            await secret_service.list_secrets(
+                uow,
+                tenant.environment_id,
+                organization_id=tenant.org_id,
+                actor_user_id=outsider.id,
+            )
+
+
+@pytest.mark.asyncio
+async def test_secret_of_another_org_is_not_reachable(
+    session_factory: async_sessionmaker[AsyncSession],
+    uow_factory,
+    tenant: TenantFixture,
+    crypto_service: CryptoService,
+    secret_service: SecretService,
+) -> None:
+    """
+    Passing a foreign environment id while authenticated in another org must fail
+    even though the caller is a legitimate owner of their own org.
+    """
+    other = await seed_tenant(
+        session_factory,
+        crypto_service,
+        email="other-secrets@example.com",
+        org_name="Other Secrets Org",
+        org_slug="other-secrets-org",
+        project_name="Foreign",
+        project_slug="foreign-secrets",
+    )
+
+    async with uow_factory() as uow:
+        with pytest.raises(EnvironmentNotFoundError):
+            await secret_service.create_secret(
+                uow,
+                other.environment_id,
+                organization_id=tenant.org_id,
+                key_name="CROSS_ORG",
+                plain_value="nope",
+                actor_user_id=tenant.user_id,
+            )

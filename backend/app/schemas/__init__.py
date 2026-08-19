@@ -8,6 +8,13 @@ from .membership import (
 )
 from .organization import OrganizationCreate, OrganizationRead, OrganizationUpdate
 from .project import ProjectCreate, ProjectRead, ProjectUpdate
+from .secret import (
+    SecretCreate,
+    SecretRead,
+    SecretReveal,
+    SecretUpdate,
+    SecretVersionRead,
+)
 from .user import UserCreate, UserRead, UserUpdate
 
 __all__ = [
@@ -28,4 +35,9 @@ __all__ = [
     "ProjectRead",
     "EnvironmentCreate",
     "EnvironmentRead",
+    "SecretCreate",
+    "SecretUpdate",
+    "SecretRead",
+    "SecretVersionRead",
+    "SecretReveal",
 ]

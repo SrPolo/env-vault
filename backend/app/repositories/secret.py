@@ -23,6 +23,21 @@ class SecretRepository(BaseRepository[Secret]):
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
+    async def list_by_environment(self, environment_id: UUID | str) -> list[Secret]:
+        """
+        Lists active (non-deleted) secrets of an environment, ordered by key name.
+        """
+        query = (
+            select(Secret)
+            .where(
+                Secret.environment_id == environment_id,
+                Secret.is_deleted.is_(False),
+            )
+            .order_by(Secret.key_name)
+        )
+        result = await self.session.execute(query)
+        return list(result.scalars().all())
+
     async def soft_delete(self, id: UUID | str) -> None:
         """
         Soft deletes a secret by marking it as deleted and setting the deleted_at timestamp.
