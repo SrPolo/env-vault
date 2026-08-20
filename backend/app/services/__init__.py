@@ -1,3 +1,10 @@
+from .auth import (
+    AuthService,
+    EmailAlreadyRegisteredError,
+    InactiveUserError,
+    InvalidCredentialsError,
+    InvalidRefreshTokenError,
+)
 from .crypto import CryptoService
 from .environment import (
     EnvironmentAlreadyExistsError,
@@ -27,6 +34,11 @@ from .secret import (
 )
 
 __all__ = [
+    "AuthService",
+    "EmailAlreadyRegisteredError",
+    "InvalidCredentialsError",
+    "InactiveUserError",
+    "InvalidRefreshTokenError",
     "CryptoService",
     "SecretService",
     "SecretNotFoundError",

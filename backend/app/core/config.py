@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "EnvVault Backend"
     API_V1_STR: str = "/api/v1"
 
+    # JWT / Auth — SECRET_KEY must be overridden in every non-local environment.
+    SECRET_KEY: str = "change_me_in_production_use_a_long_random_secret"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # CORS origins for the future dashboard (empty = no CORS middleware).
+    CORS_ORIGINS: list[str] = []
+
     # KMS / Encryption
     ENCRYPTION_MASTER_KEY: str = "change_me_in_production_min_32_bytes_long!"
 
