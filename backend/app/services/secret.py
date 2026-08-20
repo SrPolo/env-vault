@@ -190,6 +190,7 @@ class SecretService:
     ) -> str:
         """
         Fetches the current version of a secret and decrypts its value.
+        Every successful reveal is persisted to audit_logs.
         """
         await require_org_role(uow, organization_id, actor_user_id, "member")
         secret = await self._get_owned_secret(uow, secret_id, organization_id)
@@ -205,10 +206,19 @@ class SecretService:
         if not enc_key:
             raise EncryptionKeyNotFoundError("Encryption key for this version is missing.")
 
-        # Decrypt in memory
         plain_value = self.crypto.decrypt_secret(
             version.encrypted_value, version.iv, enc_key.wrapped_dek
         )
+
+        uow.audit_logs.record(
+            organization_id=organization_id,
+            user_id=actor_user_id,
+            action="reveal",
+            resource_type="secret",
+            resource_id=secret.id,
+            metadata={"key_name": secret.key_name, "version_id": str(version.id)},
+        )
+        await uow.commit()
         return plain_value
 
     async def delete_secret(

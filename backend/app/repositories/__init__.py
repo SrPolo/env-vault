@@ -1,3 +1,4 @@
+from .audit import AuditLogRepository
 from .base import BaseRepository
 from .membership import MembershipRepository
 from .organization import OrganizationRepository
@@ -16,4 +17,5 @@ __all__ = [
     "SecretRepository",
     "SecretVersionRepository",
     "EncryptionKeyRepository",
+    "AuditLogRepository",
 ]

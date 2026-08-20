@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_maker, set_rls_context
 from app.repositories import (
+    AuditLogRepository,
     EncryptionKeyRepository,
     EnvironmentRepository,
     MembershipRepository,
@@ -33,6 +34,7 @@ class AbstractUnitOfWork:
     secrets: SecretRepository
     secret_versions: SecretVersionRepository
     encryption_keys: EncryptionKeyRepository
+    audit_logs: AuditLogRepository
 
     async def __aenter__(self) -> AbstractUnitOfWork:
         return self
@@ -90,6 +92,7 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
         self.secrets = SecretRepository(self.session)
         self.secret_versions = SecretVersionRepository(self.session)
         self.encryption_keys = EncryptionKeyRepository(self.session)
+        self.audit_logs = AuditLogRepository(self.session)
 
         return self
 
@@ -106,6 +109,9 @@ class SqlAlchemyUnitOfWork(AbstractUnitOfWork):
     async def commit(self) -> None:
         if self.session:
             await self.session.commit()
+            # set_config(..., is_local=true) dies with the transaction; re-apply
+            # so subsequent queries in this UoW still see the correct RLS context.
+            await set_rls_context(self.session, self.user_id, self.org_id)
 
     async def flush(self) -> None:
         if self.session:
