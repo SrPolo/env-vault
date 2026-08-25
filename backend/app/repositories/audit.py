@@ -1,5 +1,7 @@
 from uuid import UUID
 
+from sqlalchemy import select
+
 from app.models.audit import AuditLog
 from app.repositories.base import BaseRepository
 
@@ -27,3 +29,20 @@ class AuditLogRepository(BaseRepository[AuditLog]):
         )
         self.add(entry)
         return entry
+
+    async def list_by_organization(
+        self,
+        organization_id: UUID | str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[AuditLog]:
+        query = (
+            select(AuditLog)
+            .where(AuditLog.organization_id == organization_id)
+            .order_by(AuditLog.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        result = await self.session.execute(query)
+        return list(result.scalars().all())

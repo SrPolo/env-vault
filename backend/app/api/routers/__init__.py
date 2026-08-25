@@ -1,4 +1,5 @@
 from app.api.routers import (
+    audit,
     auth,
     environments,
     health,
@@ -8,6 +9,7 @@ from app.api.routers import (
 )
 
 __all__ = [
+    "audit",
     "auth",
     "health",
     "organizations",

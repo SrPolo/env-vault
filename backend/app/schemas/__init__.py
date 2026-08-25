@@ -1,3 +1,4 @@
+from .audit import AuditLogRead
 from .auth import (
     LoginRequest,
     LogoutRequest,
@@ -24,6 +25,7 @@ from .secret import (
 from .user import UserCreate, UserRead, UserUpdate
 
 __all__ = [
+    "AuditLogRead",
     "LoginRequest",
     "LogoutRequest",
     "RefreshRequest",

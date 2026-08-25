@@ -124,6 +124,19 @@ async def test_full_domain_flow_create_reveal_audits(
     assert row.resource_type == "secret"
     assert row.key_name == "DATABASE_URL"
 
+    audit_list = await client.get(
+        f"/api/v1/orgs/{org_id}/audit-logs",
+        headers=headers,
+    )
+    assert audit_list.status_code == 200, audit_list.text
+    entries = audit_list.json()
+    assert len(entries) >= 1
+    reveal_entry = next(e for e in entries if e["resource_id"] == secret["id"])
+    assert reveal_entry["action"] == "reveal"
+    assert reveal_entry["resource_type"] == "secret"
+    assert reveal_entry["metadata"]["key_name"] == "DATABASE_URL"
+    assert reveal_entry["user_id"] is not None
+
 
 @pytest.mark.asyncio
 async def test_viewer_cannot_reveal_secret_via_http(client: AsyncClient) -> None:
@@ -181,3 +194,24 @@ async def test_viewer_cannot_reveal_secret_via_http(client: AsyncClient) -> None
         headers=viewer_headers,
     )
     assert reveal.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_non_member_cannot_list_audit_logs(client: AsyncClient) -> None:
+    owner_token = await _register_and_login(client, "owner-audit@example.com")
+    outsider_token = await _register_and_login(client, "outsider-audit@example.com")
+    owner_headers = _auth(owner_token)
+
+    org_id = (
+        await client.post(
+            "/api/v1/orgs",
+            headers=owner_headers,
+            json={"name": "Audit Org", "slug": "audit-org"},
+        )
+    ).json()["id"]
+
+    outsider = await client.get(
+        f"/api/v1/orgs/{org_id}/audit-logs",
+        headers=_auth(outsider_token),
+    )
+    assert outsider.status_code == 403

@@ -1,3 +1,4 @@
+from .audit import AuditService
 from .auth import (
     AuthService,
     EmailAlreadyRegisteredError,
@@ -34,6 +35,7 @@ from .secret import (
 )
 
 __all__ = [
+    "AuditService",
     "AuthService",
     "EmailAlreadyRegisteredError",
     "InvalidCredentialsError",

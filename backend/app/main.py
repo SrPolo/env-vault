@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.exception_handlers import register_exception_handlers
 from app.api.routers import (
+    audit,
     auth,
     environments,
     health,
@@ -29,6 +30,7 @@ def create_app() -> FastAPI:
     application.include_router(health.router)
     application.include_router(auth.router, prefix=settings.API_V1_STR)
     application.include_router(organizations.router, prefix=settings.API_V1_STR)
+    application.include_router(audit.router, prefix=settings.API_V1_STR)
     application.include_router(projects.router, prefix=settings.API_V1_STR)
     application.include_router(environments.router, prefix=settings.API_V1_STR)
     application.include_router(secrets.router, prefix=settings.API_V1_STR)

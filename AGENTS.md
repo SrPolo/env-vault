@@ -106,15 +106,16 @@ Backend (`/backend`) — único componente con contenido real. Dashboard y landi
 ### Completo
 
 - Modelo de datos, migraciones Alembic (incl. bootstrap `create_organization_with_owner`, casts seguros de GUCs RLS, GRANTs DML a `envvault_app`, SELECT de memberships entre peers vía `user_is_org_member`), RLS, envelope encryption, Repository + UoW, docker-compose.
-- **Servicios de dominio**: `CryptoService`, `SecretService`, `OrganizationService`, `MembershipService`, `ProjectService`, `EnvironmentService` (+ RBAC app-layer). UoW expone `organizations` / `memberships`.
+- **Servicios de dominio**: `CryptoService`, `SecretService`, `OrganizationService`, `MembershipService`, `ProjectService`, `EnvironmentService`, `AuthService`, `AuditService` (+ RBAC app-layer). UoW expone `organizations` / `memberships` / `audit_logs` / `refresh_tokens`.
+- **Auth JWT/Argon2 (2a)**: access JWT (15 min) + refresh opaco hasheado, rotación, detección de reuso, logout / logout-all. Schemas `UserCreate`/`UserRead` alineados con `full_name`.
+- **Deps FastAPI (2b)**: `get_current_user`, `get_auth_uow` / `get_user_uow` / `get_org_uow` (membership gate 403), inyección de servicios.
+- **Routers `/api/v1` (Fase 3)**: auth (register/login/refresh/logout/logout-all/me), orgs + memberships, projects, environments, secrets (reveal → audit `reveal`), audit-logs (list), `/health` + `/health/ready`. Org en path (`/orgs/{org_id}/...`). CORS preparado (`CORS_ORIGINS`).
 - **Roles DB**: runtime `envvault_app` (RLS) vs migraciones (`envvault_user` local / `envvault_migrate` staging-prod). `init-db.sh` crea el rol app en el primer boot de Postgres; scripts `provision_migration_role.sh` + `provision_app_role.sh` para bootstrap no-local; FastAPI/config usan `envvault_app` por defecto; Alembic usa `MIGRATION_POSTGRES_*`.
-- **Tests**: suite pytest con testcontainers (Postgres real). Unitarios de KMS/crypto + integración de UoW/RLS, `SecretService` y servicios de dominio. Los tests conectan como rol no-superuser (`envvault_app`) para que FORCE RLS sea efectivo.
+- **Tests**: suite pytest con testcontainers (Postgres real). Unitarios de KMS/crypto/auth + integración de UoW/RLS, AuthService, SecretService, dominio y HTTP (`test_auth_http`, `test_domain_http`). Los tests conectan como rol no-superuser (`envvault_app`) para que FORCE RLS sea efectivo.
 
 ### Falta (ordenado por dependencias)
 
-El orden anterior listaba routers antes que schemas/servicios y auth; eso invertía el grafo real (`routers → services → uow → repos`, con `user_id`/`org_id` desde JWT). Abajo, cada fase solo depende de fases anteriores.
-
-`main.py` sigue siendo boilerplate (sin routers). Auth aún no existe.
+Cada fase solo depende de fases anteriores. Redis corre en docker-compose pero la app aún no lo usa; `structlog` está en deps sin cablear.
 
 #### Fase 0 — Infra DB no-local (antes del primer deploy) ✅
 
@@ -122,24 +123,24 @@ El orden anterior listaba routers antes que schemas/servicios y auth; eso invert
 
 #### Fase 1 — Capa de dominio (sin HTTP) ✅
 
-1. **Schemas Pydantic + repos + servicios de dominio**: Hecho — Organization (vía `create_organization_with_owner`), Membership (RBAC viewer read-only), Project, Environment (DEK activa al crear), UoW con `organizations`/`memberships`. AuditLog opcional pendiente. Tests en `tests/integration/test_domain_services.py`.
+1. **Schemas Pydantic + repos + servicios de dominio**: Hecho — Organization, Membership, Project, Environment (DEK activa al crear), Secret, Audit (list + reveal write). Tests en `tests/integration/`.
 
 #### Fase 2 — Autenticación núcleo
 
-2a. **Auth mínima viable**: Argon2 + JWT access/refresh + `RefreshToken`. Alinear schemas (`UserCreate`/`UserRead` vs `full_name`). `AuthService` (register, login, refresh, logout). Sin OAuth ni 2FA todavía.
-2b. **Dependencias FastAPI**: `get_current_user`, `get_org_context`, `get_uow(user_id, org_id)`, inyección de servicios.
-2c. **Auth extendida** (después de 2a y routers básicos): OAuth2 (GitHub/Google), luego 2FA/TOTP — no bloquea el MVP HTTP.
+2a. **Auth mínima viable** ✅ — Argon2 + JWT access/refresh + `RefreshToken`. `AuthService` (register, login, refresh, logout, logout_all).
+2b. **Dependencias FastAPI** ✅ — `CurrentUser`, UoW por contexto, inyección de servicios.
+2c. **Auth extendida** (después del MVP HTTP): OAuth2 (GitHub/Google), luego 2FA/TOTP — columnas en `users` listas; no bloquea clientes.
 
-#### Fase 3 — Routers / API de negocio
+#### Fase 3 — Routers / API de negocio ✅
 
-3. **Montar routers en FastAPI** (reemplazar boilerplate de `main.py`), en este orden:
-   1. `auth` — register/login/refresh
-   2. `organizations` / `memberships`
-   3. `projects` / `environments`
-   4. `secrets` — delegar a `SecretService` (reveal → audit `reveal`)
-   5. Healthcheck (`/health`) — útil para Docker/Nginx/CI
+3. **Routers montados** en `main.py` bajo `/api/v1` (org en path). Reveal audita; listado de audit logs expuesto.
 
-   Convención sugerida: `/api/v1/...` con org en path o header (`X-Organization-Id`).
+3b. **Huecos menores de API** (opcionales, no bloquean dashboard MVP):
+
+- Auditar mutaciones (create/update/delete/invite), no solo reveal
+- Perfil / cambio de password (`UserUpdate`)
+- `.env.example`
+- Tabla `api_tokens` sin servicio (relevante para CLI, Fase 6)
 
 #### Fase 4 — Hardening de la API
 
@@ -148,15 +149,27 @@ El orden anterior listaba routers antes que schemas/servicios y auth; eso invert
 
 #### Fase 5 — Empaquetado y entrega
 
-6. **CI/CD** (GitHub Actions: lint → test → build); ampliar con tests HTTP de la Fase 3.
+6. **CI/CD** (GitHub Actions: lint → test → build); ampliar cobertura HTTP.
 7. **Nginx** — reverse proxy / TLS. Si el pipeline despliega a staging/prod, depende de la Fase 0.
 
 #### Fase 6 — Clientes (en paralelo entre sí; dependen de la API)
 
 8. **Dashboard** (Vite/React)
 9. **Landing** (Astro) — puede adelantarse visualmente; waitlist/CTA real pueden esperar
-10. **CLI** (`envvault pull`) — necesita auth + secrets API
+10. **CLI** (`envvault pull`) — necesita auth + secrets API (+ `api_tokens`)
 
-### Próximo paso recomendado
+### Próximos pasos recomendados
 
-Auth JWT/Argon2 + deps FastAPI (`CurrentUser`, `OrgContext`, UoW), luego routers que expongan los servicios de dominio ya existentes.
+Orden sugerido (defensible en code review): **B → C**, luego **D**. El punto A (huecos de API para sesión/audit/ready) ya está hecho.
+
+**B — Hardening (Fase 4)**  
+Rate limit en login/register/refresh y especialmente `reveal`; cablear structlog (`request_id`, `user_id`, `org_id`). Redis ya está en compose.  
+Por qué: en un vault, brute-force y reveal sin límite son el riesgo más fácil de demostrar en entrevista.
+
+**C — CI/CD (Fase 5)**  
+GitHub Actions: ruff + pytest (testcontainers). El Dockerfile y la suite ya existen.  
+Por qué: cierra el círculo “production-grade” barato; no enseña dominio, pero sí higiene.
+
+**D — Clientes o auth extendida**  
+Dashboard (Vite/React) u OAuth/2FA.  
+Por qué: lo visible del portfolio vs. profundidad de auth. El dashboard ya puede bootstrappear con `/auth/me` y mostrar audit logs. No empezar 2c antes de tener al menos B o un esqueleto de dashboard.

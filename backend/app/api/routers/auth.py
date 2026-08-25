@@ -1,6 +1,6 @@
 from fastapi import APIRouter, status
 
-from app.api.deps import AuthServiceDep, AuthUoW
+from app.api.deps import AuthServiceDep, AuthUoW, CurrentUser, UserUoW
 from app.schemas.auth import LoginRequest, LogoutRequest, RefreshRequest, TokenPair
 from app.schemas.user import UserCreate, UserRead
 
@@ -57,3 +57,17 @@ async def logout(
     auth_service: AuthServiceDep,
 ) -> None:
     await auth_service.logout(uow, raw_refresh_token=body.refresh_token)
+
+
+@router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
+async def logout_all(
+    current_user: CurrentUser,
+    uow: UserUoW,
+    auth_service: AuthServiceDep,
+) -> None:
+    await auth_service.logout_all(uow, user_id=current_user.id)
+
+
+@router.get("/me", response_model=UserRead)
+async def me(current_user: CurrentUser) -> UserRead:
+    return UserRead.model_validate(current_user)

@@ -29,6 +29,56 @@ async def test_health(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_health_ready(client: AsyncClient) -> None:
+    response = await client.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "database": "up"}
+
+
+@pytest.mark.asyncio
+async def test_me_and_logout_all(client: AsyncClient) -> None:
+    register = await client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "me-user@example.com",
+            "password": "password123",
+            "full_name": "Me User",
+        },
+    )
+    assert register.status_code == 201
+    user_id = register.json()["id"]
+
+    login = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "me-user@example.com", "password": "password123"},
+    )
+    assert login.status_code == 200
+    tokens = login.json()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    me = await client.get("/api/v1/auth/me", headers=headers)
+    assert me.status_code == 200
+    body = me.json()
+    assert body["id"] == user_id
+    assert body["email"] == "me-user@example.com"
+    assert body["full_name"] == "Me User"
+    assert "password" not in body
+    assert "password_hash" not in body
+
+    unauth = await client.get("/api/v1/auth/me")
+    assert unauth.status_code == 401
+
+    logout_all = await client.post("/api/v1/auth/logout-all", headers=headers)
+    assert logout_all.status_code == 204
+
+    reuse = await client.post(
+        "/api/v1/auth/refresh",
+        json={"refresh_token": tokens["refresh_token"]},
+    )
+    assert reuse.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_register_login_refresh_logout(client: AsyncClient) -> None:
     register = await client.post(
         "/api/v1/auth/register",

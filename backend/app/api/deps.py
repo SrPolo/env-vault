@@ -13,6 +13,7 @@ from app.core.database import async_session_maker
 from app.core.security.tokens import decode_access_token
 from app.core.uow import AbstractUnitOfWork, SqlAlchemyUnitOfWork
 from app.models.user import User
+from app.services.audit import AuditService
 from app.services.auth import AuthService
 from app.services.crypto import CryptoService
 from app.services.environment import EnvironmentService
@@ -132,6 +133,10 @@ def get_auth_service() -> AuthService:
     return AuthService()
 
 
+def get_audit_service() -> AuditService:
+    return AuditService()
+
+
 def get_organization_service() -> OrganizationService:
     return OrganizationService()
 
@@ -161,6 +166,7 @@ def get_secret_service(
 
 
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
+AuditServiceDep = Annotated[AuditService, Depends(get_audit_service)]
 OrganizationServiceDep = Annotated[
     OrganizationService, Depends(get_organization_service)
 ]
