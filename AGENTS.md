@@ -111,6 +111,7 @@ Backend (`/backend`) — único componente con contenido real. Dashboard y landi
 - **Deps FastAPI (2b)**: `get_current_user`, `get_auth_uow` / `get_user_uow` / `get_org_uow` (membership gate 403), inyección de servicios.
 - **Routers `/api/v1` (Fase 3)**: auth (register/login/refresh/logout/logout-all/me), orgs + memberships, projects, environments, secrets (reveal → audit `reveal`), audit-logs (list), `/health` + `/health/ready`. Org en path (`/orgs/{org_id}/...`). CORS preparado (`CORS_ORIGINS`).
 - **Hardening (Fase 4)**: rate limit fijo por ventana (Redis en runtime, memory en tests) en register/login/refresh (por IP) y reveal (por user); structlog JSON con `request_id` / `user_id` / `org_id` + header `X-Request-ID`.
+- **CI (Fase 5)**: GitHub Actions — ruff → pytest (testcontainers) → Docker build.
 - **Roles DB**: runtime `envvault_app` (RLS) vs migraciones (`envvault_user` local / `envvault_migrate` staging-prod). `init-db.sh` crea el rol app en el primer boot de Postgres; scripts `provision_migration_role.sh` + `provision_app_role.sh` para bootstrap no-local; FastAPI/config usan `envvault_app` por defecto; Alembic usa `MIGRATION_POSTGRES_*`.
 - **Tests**: suite pytest con testcontainers (Postgres real). Unitarios de KMS/crypto/auth/rate-limit + integración de UoW/RLS, AuthService, SecretService, dominio y HTTP (`test_auth_http`, `test_domain_http`). Los tests conectan como rol no-superuser (`envvault_app`) para que FORCE RLS sea efectivo.
 
@@ -150,7 +151,7 @@ Cada fase solo depende de fases anteriores.
 
 #### Fase 5 — Empaquetado y entrega
 
-6. **CI/CD** (GitHub Actions: lint → test → build); ampliar cobertura HTTP.
+6. **CI/CD** ✅ — GitHub Actions: lint (ruff) → test (pytest + testcontainers) → build (Docker image). Workflow en `.github/workflows/ci.yml`.
 7. **Nginx** — reverse proxy / TLS. Si el pipeline despliega a staging/prod, depende de la Fase 0.
 
 #### Fase 6 — Clientes (en paralelo entre sí; dependen de la API)
@@ -161,12 +162,11 @@ Cada fase solo depende de fases anteriores.
 
 ### Próximos pasos recomendados
 
-Orden sugerido: **C**, luego **D**. Los puntos A (huecos de API) y B (hardening) ya están hechos.
-
-**C — CI/CD (Fase 5)**  
-GitHub Actions: ruff + pytest (testcontainers). El Dockerfile y la suite ya existen.  
-Por qué: cierra el círculo “production-grade” barato; no enseña dominio, pero sí higiene.
+Orden sugerido: **D** (clientes). A (API), B (hardening) y C (CI) ya están hechos.
 
 **D — Clientes o auth extendida**  
 Dashboard (Vite/React) u OAuth/2FA.  
 Por qué: lo visible del portfolio vs. profundidad de auth. El dashboard ya puede bootstrappear con `/auth/me` y mostrar audit logs.
+
+**Opcional (Fase 5 restante)**  
+Nginx / TLS cuando haya un target de deploy (staging). No bloquea el dashboard local contra la API en `:8000`.

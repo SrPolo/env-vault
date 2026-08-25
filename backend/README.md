@@ -129,7 +129,16 @@ Rate limiting usa backend `memory` en tests (`RATE_LIMIT_BACKEND=memory` en
 
 ```bash
 uv run pytest
+uv run ruff check .
 ```
+
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) en cada push/PR:
+
+1. **Lint** — `ruff check`
+2. **Test** — `pytest` (testcontainers + Docker en el runner)
+3. **Build** — imagen Docker del backend (`Dockerfile`)
 
 ## Useful commands
 
@@ -138,4 +147,5 @@ uv run alembic upgrade head
 uv run alembic revision -m "message"
 uv run ruff check .
 uv run pytest
+docker build -t envvault-backend ./backend
 ```
