@@ -1,8 +1,8 @@
 from uuid import UUID
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Depends, status
 
-from app.api.deps import CurrentUser, OrgUoW, SecretServiceDep
+from app.api.deps import CurrentUser, OrgUoW, SecretServiceDep, rate_limit_reveal
 from app.schemas.secret import SecretCreate, SecretRead, SecretReveal, SecretUpdate
 
 router = APIRouter(
@@ -70,7 +70,11 @@ async def rotate_secret(
     return SecretRead.model_validate(secret)
 
 
-@router.post("/{secret_id}/reveal", response_model=SecretReveal)
+@router.post(
+    "/{secret_id}/reveal",
+    response_model=SecretReveal,
+    dependencies=[Depends(rate_limit_reveal)],
+)
 async def reveal_secret(
     org_id: UUID,
     secret_id: UUID,

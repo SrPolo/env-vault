@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import PostgresDsn, TypeAdapter, computed_field
 from pydantic_core import MultiHostUrl
@@ -30,6 +31,18 @@ class Settings(BaseSettings):
 
     # KMS / Encryption
     ENCRYPTION_MASTER_KEY: str = "change_me_in_production_min_32_bytes_long!"
+
+    # Redis / rate limiting. ``memory`` backend is for tests without Redis.
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    REDIS_PASSWORD: str | None = None
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_BACKEND: Literal["redis", "memory"] = "redis"
+    RATE_LIMIT_AUTH_REQUESTS: int = 20
+    RATE_LIMIT_AUTH_WINDOW_SECONDS: int = 60
+    RATE_LIMIT_REVEAL_REQUESTS: int = 30
+    RATE_LIMIT_REVEAL_WINDOW_SECONDS: int = 60
 
     # Runtime DB role (FastAPI). Must NOT be a superuser / BYPASSRLS role —
     # otherwise FORCE ROW LEVEL SECURITY is ineffective.
@@ -71,6 +84,12 @@ class Settings(BaseSettings):
             self.MIGRATION_POSTGRES_USER,
             self.MIGRATION_POSTGRES_PASSWORD,
         )
+
+    @computed_field
+    @property
+    def REDIS_URL(self) -> str:
+        auth = f":{self.REDIS_PASSWORD}@" if self.REDIS_PASSWORD else ""
+        return f"redis://{auth}{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
 
 settings = Settings()

@@ -38,16 +38,16 @@ uv run alembic upgrade head
 
 ### Local vs staging/prod
 
-| Entorno | Rol de migraciones (Alembic) | Rol de runtime (FastAPI) | Notas |
-|---------|------------------------------|--------------------------|--------|
-| **Local** (docker-compose) | `envvault_user` | `envvault_app` | `envvault_user` es **superuser** por conveniencia. `init-db.sh` crea `envvault_app` en el primer boot. |
-| **Staging / prod** | `envvault_migrate` | `envvault_app` | Ambos **sin** `SUPERUSER` / `BYPASSRLS` / `CREATEROLE`. Bootstrap one-shot por un operador/superuser; no reutilizar el modelo local. |
+| Entorno                    | Rol de migraciones (Alembic) | Rol de runtime (FastAPI) | Notas                                                                                                                                |
+| -------------------------- | ---------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **Local** (docker-compose) | `envvault_user`              | `envvault_app`           | `envvault_user` es **superuser** por conveniencia. `init-db.sh` crea `envvault_app` en el primer boot.                               |
+| **Staging / prod**         | `envvault_migrate`           | `envvault_app`           | Ambos **sin** `SUPERUSER` / `BYPASSRLS` / `CREATEROLE`. Bootstrap one-shot por un operador/superuser; no reutilizar el modelo local. |
 
-| Rol | Quién lo usa | Privilegios esperados |
-|-----|--------------|------------------------|
-| `envvault_user` (solo local) | Alembic / ops en docker-compose | Dueño del schema. Superuser de conveniencia — **no** usar este patrón en staging/prod. |
-| `envvault_migrate` (staging/prod) | Alembic vía `MIGRATION_POSTGRES_*` | Dueño del schema `public`. `LOGIN`, **sin** `SUPERUSER` / `BYPASSRLS` / `CREATEROLE`. Puede crear tablas, policies, functions y `GRANT` a `envvault_app`. |
-| `envvault_app` | FastAPI en runtime + tests de integración | `LOGIN`, **sin** `BYPASSRLS`, sin `SUPERUSER`. Solo DML + `EXECUTE` explícito en funciones de negocio. |
+| Rol                               | Quién lo usa                              | Privilegios esperados                                                                                                                                     |
+| --------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `envvault_user` (solo local)      | Alembic / ops en docker-compose           | Dueño del schema. Superuser de conveniencia — **no** usar este patrón en staging/prod.                                                                    |
+| `envvault_migrate` (staging/prod) | Alembic vía `MIGRATION_POSTGRES_*`        | Dueño del schema `public`. `LOGIN`, **sin** `SUPERUSER` / `BYPASSRLS` / `CREATEROLE`. Puede crear tablas, policies, functions y `GRANT` a `envvault_app`. |
+| `envvault_app`                    | FastAPI en runtime + tests de integración | `LOGIN`, **sin** `BYPASSRLS`, sin `SUPERUSER`. Solo DML + `EXECUTE` explícito en funciones de negocio.                                                    |
 
 Defaults en `app/core/config.py`:
 
@@ -105,24 +105,27 @@ Por eso:
 - **Docker local (primer boot):** [`init-db.sh`](init-db.sh) crea `envvault_app`.
 - **Volumen ya existente / repair local:** [`scripts/provision_app_role.sh`](scripts/provision_app_role.sh).
 - **Staging / prod:** [`scripts/provision_migration_role.sh`](scripts/provision_migration_role.sh)
-  + [`scripts/provision_app_role.sh`](scripts/provision_app_role.sh).
+  - [`scripts/provision_app_role.sh`](scripts/provision_app_role.sh).
 - Alembic **asume** que `envvault_app` ya existe y hace `GRANT … TO envvault_app`
   (falla con un mensaje claro si falta el rol).
 
 ### Requisitos del rol que ejecuta Alembic
 
-| Operación | ¿Quién puede? |
-|-----------|----------------|
-| `CREATE TABLE` / policies / functions | Dueño del schema (`envvault_migrate` en staging/prod; `envvault_user` en local) |
-| `CREATE ROLE` (**no lo hace Alembic**) | Superuser o `CREATEROLE` — scripts de provisioning / `init-db.sh` |
-| `GRANT … TO envvault_app` | Dueño del schema (rol de migraciones) |
-| `CREATE EXTENSION` | Superuser en bootstrap (`provision_migration_role.sh` / `init-db.sh`); Alembic asume que ya existen |
+| Operación                              | ¿Quién puede?                                                                                       |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `CREATE TABLE` / policies / functions  | Dueño del schema (`envvault_migrate` en staging/prod; `envvault_user` en local)                     |
+| `CREATE ROLE` (**no lo hace Alembic**) | Superuser o `CREATEROLE` — scripts de provisioning / `init-db.sh`                                   |
+| `GRANT … TO envvault_app`              | Dueño del schema (rol de migraciones)                                                               |
+| `CREATE EXTENSION`                     | Superuser en bootstrap (`provision_migration_role.sh` / `init-db.sh`); Alembic asume que ya existen |
 
 ## Tests
 
 Los tests de integración levantan Postgres con testcontainers, crean
 `envvault_app` **antes** de migrar (mismo contrato que init-db), migran, y
 ejecutan la suite como ese rol para que FORCE RLS sea efectivo.
+
+Rate limiting usa backend `memory` en tests (`RATE_LIMIT_BACKEND=memory` en
+`conftest.py`). En docker-compose / staging se usa Redis.
 
 ```bash
 uv run pytest

@@ -1,3 +1,6 @@
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -12,11 +15,47 @@ from app.api.routers import (
     secrets,
 )
 from app.core.config import settings
+from app.core.logging import setup_logging
+from app.core.middleware import RequestContextMiddleware
+from app.core.rate_limit import (
+    MemoryRateLimiter,
+    NoOpRateLimiter,
+    RedisRateLimiter,
+)
+from app.core.redis import create_redis_client
+
+
+@asynccontextmanager
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    setup_logging()
+
+    if not settings.RATE_LIMIT_ENABLED:
+        application.state.rate_limiter = NoOpRateLimiter()
+        application.state.redis = None
+    elif settings.RATE_LIMIT_BACKEND == "memory":
+        application.state.rate_limiter = MemoryRateLimiter()
+        application.state.redis = None
+    else:
+        redis = create_redis_client()
+        application.state.redis = redis
+        application.state.rate_limiter = RedisRateLimiter(redis)
+        # Fail fast if Redis is required but unreachable.
+        await redis.ping()
+
+    try:
+        yield
+    finally:
+        limiter = getattr(application.state, "rate_limiter", None)
+        if limiter is not None:
+            await limiter.aclose()
 
 
 def create_app() -> FastAPI:
-    application = FastAPI(title=settings.PROJECT_NAME)
+    application = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
     register_exception_handlers(application)
+
+    # RequestContextMiddleware outermost so every response gets X-Request-ID.
+    application.add_middleware(RequestContextMiddleware)
 
     if settings.CORS_ORIGINS:
         application.add_middleware(

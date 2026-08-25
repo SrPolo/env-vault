@@ -110,12 +110,13 @@ Backend (`/backend`) — único componente con contenido real. Dashboard y landi
 - **Auth JWT/Argon2 (2a)**: access JWT (15 min) + refresh opaco hasheado, rotación, detección de reuso, logout / logout-all. Schemas `UserCreate`/`UserRead` alineados con `full_name`.
 - **Deps FastAPI (2b)**: `get_current_user`, `get_auth_uow` / `get_user_uow` / `get_org_uow` (membership gate 403), inyección de servicios.
 - **Routers `/api/v1` (Fase 3)**: auth (register/login/refresh/logout/logout-all/me), orgs + memberships, projects, environments, secrets (reveal → audit `reveal`), audit-logs (list), `/health` + `/health/ready`. Org en path (`/orgs/{org_id}/...`). CORS preparado (`CORS_ORIGINS`).
+- **Hardening (Fase 4)**: rate limit fijo por ventana (Redis en runtime, memory en tests) en register/login/refresh (por IP) y reveal (por user); structlog JSON con `request_id` / `user_id` / `org_id` + header `X-Request-ID`.
 - **Roles DB**: runtime `envvault_app` (RLS) vs migraciones (`envvault_user` local / `envvault_migrate` staging-prod). `init-db.sh` crea el rol app en el primer boot de Postgres; scripts `provision_migration_role.sh` + `provision_app_role.sh` para bootstrap no-local; FastAPI/config usan `envvault_app` por defecto; Alembic usa `MIGRATION_POSTGRES_*`.
-- **Tests**: suite pytest con testcontainers (Postgres real). Unitarios de KMS/crypto/auth + integración de UoW/RLS, AuthService, SecretService, dominio y HTTP (`test_auth_http`, `test_domain_http`). Los tests conectan como rol no-superuser (`envvault_app`) para que FORCE RLS sea efectivo.
+- **Tests**: suite pytest con testcontainers (Postgres real). Unitarios de KMS/crypto/auth/rate-limit + integración de UoW/RLS, AuthService, SecretService, dominio y HTTP (`test_auth_http`, `test_domain_http`). Los tests conectan como rol no-superuser (`envvault_app`) para que FORCE RLS sea efectivo.
 
 ### Falta (ordenado por dependencias)
 
-Cada fase solo depende de fases anteriores. Redis corre en docker-compose pero la app aún no lo usa; `structlog` está en deps sin cablear.
+Cada fase solo depende de fases anteriores.
 
 #### Fase 0 — Infra DB no-local (antes del primer deploy) ✅
 
@@ -142,10 +143,10 @@ Cada fase solo depende de fases anteriores. Redis corre en docker-compose pero l
 - `.env.example`
 - Tabla `api_tokens` sin servicio (relevante para CLI, Fase 6)
 
-#### Fase 4 — Hardening de la API
+#### Fase 4 — Hardening de la API ✅
 
-4. **Rate limiting con Redis** — sobre todo auth y reveal de secretos.
-5. **Observabilidad** — cablear `structlog` (request id, user/org), métricas básicas si aplica.
+4. **Rate limiting con Redis** ✅ — auth (IP) + reveal (user); backend `memory` en tests.
+5. **Observabilidad** ✅ — structlog JSON (`request_id`, `user_id`, `org_id`); métricas Prometheus opcionales más adelante.
 
 #### Fase 5 — Empaquetado y entrega
 
@@ -160,11 +161,7 @@ Cada fase solo depende de fases anteriores. Redis corre en docker-compose pero l
 
 ### Próximos pasos recomendados
 
-Orden sugerido (defensible en code review): **B → C**, luego **D**. El punto A (huecos de API para sesión/audit/ready) ya está hecho.
-
-**B — Hardening (Fase 4)**  
-Rate limit en login/register/refresh y especialmente `reveal`; cablear structlog (`request_id`, `user_id`, `org_id`). Redis ya está en compose.  
-Por qué: en un vault, brute-force y reveal sin límite son el riesgo más fácil de demostrar en entrevista.
+Orden sugerido: **C**, luego **D**. Los puntos A (huecos de API) y B (hardening) ya están hechos.
 
 **C — CI/CD (Fase 5)**  
 GitHub Actions: ruff + pytest (testcontainers). El Dockerfile y la suite ya existen.  
@@ -172,4 +169,4 @@ Por qué: cierra el círculo “production-grade” barato; no enseña dominio, 
 
 **D — Clientes o auth extendida**  
 Dashboard (Vite/React) u OAuth/2FA.  
-Por qué: lo visible del portfolio vs. profundidad de auth. El dashboard ya puede bootstrappear con `/auth/me` y mostrar audit logs. No empezar 2c antes de tener al menos B o un esqueleto de dashboard.
+Por qué: lo visible del portfolio vs. profundidad de auth. El dashboard ya puede bootstrappear con `/auth/me` y mostrar audit logs.

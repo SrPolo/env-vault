@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+# Force in-memory rate limiting before app settings are imported.
 import os
+
+os.environ.setdefault("RATE_LIMIT_BACKEND", "memory")
+
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from urllib.parse import quote, urlparse, urlunparse

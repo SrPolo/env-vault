@@ -32,7 +32,58 @@ async def test_health(client: AsyncClient) -> None:
 async def test_health_ready(client: AsyncClient) -> None:
     response = await client.get("/health/ready")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "database": "up"}
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["database"] == "up"
+    assert body["redis"] == "skipped"
+
+
+@pytest.mark.asyncio
+async def test_request_id_header(client: AsyncClient) -> None:
+    response = await client.get("/health", headers={"X-Request-ID": "test-req-1"})
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"] == "test-req-1"
+
+    generated = await client.get("/health")
+    assert generated.headers.get("X-Request-ID")
+
+
+@pytest.mark.asyncio
+async def test_auth_rate_limit_returns_429(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.deps import get_rate_limiter, get_session_factory
+    from app.core.config import settings
+    from app.core.rate_limit import MemoryRateLimiter
+
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
+    monkeypatch.setattr(settings, "RATE_LIMIT_AUTH_REQUESTS", 3)
+    monkeypatch.setattr(settings, "RATE_LIMIT_AUTH_WINDOW_SECONDS", 60)
+
+    application = create_app()
+    limiter = MemoryRateLimiter()
+    application.dependency_overrides[get_session_factory] = lambda: session_factory
+    application.dependency_overrides[get_rate_limiter] = lambda: limiter
+
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        for i in range(3):
+            resp = await ac.post(
+                "/api/v1/auth/login",
+                json={"email": f"rl-{i}@example.com", "password": "password123"},
+            )
+            # Invalid credentials still consume the rate-limit budget.
+            assert resp.status_code == 401
+
+        blocked = await ac.post(
+            "/api/v1/auth/login",
+            json={"email": "rl-block@example.com", "password": "password123"},
+        )
+        assert blocked.status_code == 429
+        assert blocked.headers.get("Retry-After") == "60"
+
+    application.dependency_overrides.clear()
 
 
 @pytest.mark.asyncio

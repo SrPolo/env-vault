@@ -5,11 +5,15 @@ from typing import Annotated
 from uuid import UUID
 
 import jwt
-from fastapi import Depends, HTTPException, status
+import structlog
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.config import settings
 from app.core.database import async_session_maker
+from app.core.rate_limit import MemoryRateLimiter, NoOpRateLimiter, RateLimiter
+from app.core.security.kms.local import LocalKMSProvider
 from app.core.security.tokens import decode_access_token
 from app.core.uow import AbstractUnitOfWork, SqlAlchemyUnitOfWork
 from app.models.user import User
@@ -21,10 +25,9 @@ from app.services.membership import MembershipService
 from app.services.organization import OrganizationService
 from app.services.project import ProjectService
 from app.services.secret import SecretService
-from app.core.security.kms.local import LocalKMSProvider
-from app.core.config import settings
 
 bearer_scheme = HTTPBearer(auto_error=False)
+logger = structlog.get_logger(__name__)
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
@@ -78,6 +81,7 @@ async def get_current_user(
                 detail="Could not validate credentials",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        structlog.contextvars.bind_contextvars(user_id=str(user.id))
         return user
 
 
@@ -121,12 +125,87 @@ async def get_org_uow(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not a member of this organization",
             )
+        structlog.contextvars.bind_contextvars(org_id=str(org_id))
         yield uow
 
 
 AuthUoW = Annotated[AbstractUnitOfWork, Depends(get_auth_uow)]
 UserUoW = Annotated[AbstractUnitOfWork, Depends(get_user_uow)]
 OrgUoW = Annotated[AbstractUnitOfWork, Depends(get_org_uow)]
+
+
+def get_rate_limiter(request: Request) -> RateLimiter:
+    """
+    Overridable in tests. Lifespan normally installs Redis or Memory limiter
+    on ``app.state``; fall back to memory if lifespan has not run yet.
+    """
+    limiter = getattr(request.app.state, "rate_limiter", None)
+    if limiter is not None:
+        return limiter
+    if not settings.RATE_LIMIT_ENABLED:
+        return NoOpRateLimiter()
+    return MemoryRateLimiter()
+
+
+RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter)]
+
+
+def _client_ip(request: Request) -> str:
+    # Prefer first X-Forwarded-For hop when behind a trusted proxy (Nginx).
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client is not None:
+        return request.client.host
+    return "unknown"
+
+
+async def rate_limit_auth(
+    request: Request,
+    limiter: RateLimiterDep,
+) -> None:
+    """Per-IP limit for register/login/refresh (brute-force surface)."""
+    if not settings.RATE_LIMIT_ENABLED:
+        return
+    key = f"auth:{_client_ip(request)}"
+    allowed = await limiter.hit(
+        key,
+        limit=settings.RATE_LIMIT_AUTH_REQUESTS,
+        window_seconds=settings.RATE_LIMIT_AUTH_WINDOW_SECONDS,
+    )
+    if not allowed:
+        logger.warning("rate_limit_exceeded", scope="auth", key=key)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Try again later.",
+            headers={
+                "Retry-After": str(settings.RATE_LIMIT_AUTH_WINDOW_SECONDS),
+            },
+        )
+
+
+async def rate_limit_reveal(
+    current_user: CurrentUser,
+    limiter: RateLimiterDep,
+) -> None:
+    """Per-user limit for secret reveal (exfiltration / abuse surface)."""
+    if not settings.RATE_LIMIT_ENABLED:
+        return
+    key = f"reveal:{current_user.id}"
+    allowed = await limiter.hit(
+        key,
+        limit=settings.RATE_LIMIT_REVEAL_REQUESTS,
+        window_seconds=settings.RATE_LIMIT_REVEAL_WINDOW_SECONDS,
+    )
+    if not allowed:
+        logger.warning("rate_limit_exceeded", scope="reveal", key=key)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Try again later.",
+            headers={
+                "Retry-After": str(settings.RATE_LIMIT_REVEAL_WINDOW_SECONDS),
+            },
+            )
 
 
 def get_auth_service() -> AuthService:
